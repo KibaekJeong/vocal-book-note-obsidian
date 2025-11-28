@@ -8,6 +8,11 @@ export interface BookVoiceCaptureSettings {
   bookNoteTemplate: string;
   highlightBlockTemplate: string;
   kyoboEnabled: boolean;
+  // GPT Summary settings
+  enableGptSummary: boolean;
+  gptSummaryModel: string;
+  gptMaxTokens: number;
+  gptTemperature: number;
 }
 
 export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
@@ -15,12 +20,17 @@ export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
   openAIWhisperModel: "whisper-1",
   booksFolder: "Books",
   kyoboEnabled: true,
+  // GPT Summary defaults
+  enableGptSummary: false,
+  gptSummaryModel: "gpt-4o-mini",
+  gptMaxTokens: 2500,
+  gptTemperature: 0.7,
   bookNoteTemplate: `---
 type: book
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
-published: "{{publishedDate}}"
+publishedDate: "{{publishedDate}}"
 isbn: "{{isbn}}"
 source: "Kyobo"
 status: "reading"
@@ -128,6 +138,62 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.kyoboEnabled)
           .onChange(async (value: boolean) => {
             this.plugin.settings.kyoboEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // GPT Summary Section
+    containerEl.createEl("h3", { text: "GPT Book Summary" });
+
+    new Setting(containerEl)
+      .setName("Enable GPT Book Summary")
+      .setDesc("Generate AI-powered summary, key points, and quotes when creating new book notes. Requires OpenAI API key.")
+      .addToggle((toggle: ToggleComponent) =>
+        toggle
+          .setValue(this.plugin.settings.enableGptSummary)
+          .onChange(async (value: boolean) => {
+            this.plugin.settings.enableGptSummary = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("GPT Model")
+      .setDesc("The OpenAI model to use for generating summaries (e.g., gpt-4o-mini, gpt-4o).")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder("gpt-4o-mini")
+          .setValue(this.plugin.settings.gptSummaryModel)
+          .onChange(async (value: string) => {
+            this.plugin.settings.gptSummaryModel = value || "gpt-4o-mini";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("GPT Max Tokens")
+      .setDesc("Maximum tokens for GPT response (higher = longer summaries, more cost). Default: 2500.")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder("2500")
+          .setValue(String(this.plugin.settings.gptMaxTokens))
+          .onChange(async (value: string) => {
+            const parsed = parseInt(value, 10);
+            this.plugin.settings.gptMaxTokens = isNaN(parsed) ? 2500 : Math.max(500, Math.min(4000, parsed));
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("GPT Temperature")
+      .setDesc("Creativity level (0.0-1.0). Lower = more factual, higher = more creative. Default: 0.7.")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder("0.7")
+          .setValue(String(this.plugin.settings.gptTemperature))
+          .onChange(async (value: string) => {
+            const parsed = parseFloat(value);
+            this.plugin.settings.gptTemperature = isNaN(parsed) ? 0.7 : Math.max(0, Math.min(1, parsed));
             await this.plugin.saveSettings();
           })
       );

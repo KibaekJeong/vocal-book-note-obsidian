@@ -1,4 +1,4 @@
-import { Modal, App, Notice } from "obsidian";
+import { Modal, App, Notice, requestUrl } from "obsidian";
 
 export interface TranscriptionResult {
   text: string;
@@ -17,6 +17,8 @@ export class RecordingModal extends Modal {
   private timerInterval: number | null = null;
   private startTime: number = 0;
   private timerEl: HTMLElement | null = null;
+  private statusEl: HTMLElement | null = null;
+  private stopBtn: HTMLButtonElement | null = null;
   private onComplete: (blob: Blob) => void;
   private onCancel: () => void;
 
@@ -41,7 +43,7 @@ export class RecordingModal extends Modal {
     // Recording indicator
     const indicatorEl = contentEl.createDiv({ cls: "book-voice-capture-recording-indicator" });
     indicatorEl.createDiv({ cls: "book-voice-capture-recording-dot" });
-    indicatorEl.createSpan({ text: "Recording..." });
+    this.statusEl = indicatorEl.createSpan({ text: "Recording..." });
 
     // Timer
     this.timerEl = contentEl.createDiv({ cls: "book-voice-capture-timer", text: "00:00" });
@@ -55,11 +57,11 @@ export class RecordingModal extends Modal {
     // Buttons
     const buttonsEl = contentEl.createDiv({ cls: "book-voice-capture-buttons" });
     
-    const stopBtn = buttonsEl.createEl("button", { 
+    this.stopBtn = buttonsEl.createEl("button", { 
       text: "Stop & Transcribe",
       cls: "book-voice-capture-stop-btn"
     });
-    stopBtn.onclick = (): void => this.stopRecording();
+    this.stopBtn.onclick = (): void => this.stopRecording();
 
     const cancelBtn = buttonsEl.createEl("button", { 
       text: "Cancel",
@@ -149,6 +151,14 @@ export class RecordingModal extends Modal {
 
   private stopRecording(): void {
     if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
+      // Disable button and update status to prevent double-clicks
+      if (this.stopBtn) {
+        this.stopBtn.disabled = true;
+        this.stopBtn.textContent = "Processing...";
+      }
+      if (this.statusEl) {
+        this.statusEl.textContent = "Stopping...";
+      }
       this.mediaRecorder.stop();
     }
   }
@@ -178,42 +188,98 @@ export class RecordingModal extends Modal {
 }
 
 /**
- * Transcribe audio blob using OpenAI Whisper API
+ * Transcribe audio blob using OpenAI Whisper API.
+ * CRITICAL FIX: Uses requestUrl with multipart body for mobile/CORS compatibility.
  */
 export async function transcribeAudio(
   audioBlob: Blob,
   apiKey: string,
   model: string = "whisper-1"
 ): Promise<string> {
-  // Convert blob to file format
-  const audioFile = new File([audioBlob], "recording.webm", { type: audioBlob.type });
-
-  // Create form data
-  const formData = new FormData();
-  formData.append("file", audioFile);
-  formData.append("model", model);
-  formData.append("language", "ko"); // Korean language hint
-  formData.append("response_format", "text");
-
   try {
-    // Use fetch for FormData since requestUrl doesn't handle it well
-    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    // Convert blob to ArrayBuffer
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    
+    // Determine file extension based on mime type
+    const mimeType = audioBlob.type || "audio/webm";
+    const extension = getExtensionFromMimeType(mimeType);
+    const filename = `recording.${extension}`;
+    
+    // Build multipart form data manually for requestUrl compatibility
+    const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
+    
+    // Create the multipart body
+    const bodyParts: (string | ArrayBuffer)[] = [];
+    
+    // Add file field
+    bodyParts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+      `Content-Type: ${mimeType}\r\n\r\n`
+    );
+    bodyParts.push(arrayBuffer);
+    bodyParts.push("\r\n");
+    
+    // Add model field
+    bodyParts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="model"\r\n\r\n` +
+      `${model}\r\n`
+    );
+    
+    // Add language field (Korean hint)
+    bodyParts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="language"\r\n\r\n` +
+      `ko\r\n`
+    );
+    
+    // Add response_format field
+    bodyParts.push(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
+      `text\r\n`
+    );
+    
+    // End boundary
+    bodyParts.push(`--${boundary}--\r\n`);
+    
+    // Combine all parts into a single ArrayBuffer
+    const body = await combineMultipartBody(bodyParts);
+    
+    // Make the request using Obsidian's requestUrl (works on mobile)
+    const response = await requestUrl({
+      url: "https://api.openai.com/v1/audio/transcriptions",
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
-      body: formData,
+      body: body,
+      throw: false, // Don't throw on non-2xx, we'll handle it
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("[Book Voice Capture] Whisper API error:", errorText);
-      throw new Error(`Whisper API error: ${response.status} - ${errorText}`);
+    if (response.status !== 200) {
+      // IMPORTANT FIX: Surface the error body for actionable feedback
+      let errorDetail = "";
+      try {
+        // Try to parse as JSON for structured error
+        const errorBody = JSON.parse(response.text);
+        errorDetail = errorBody.error?.message || errorBody.message || response.text;
+      } catch {
+        // If not JSON, use the raw text (truncated for safety)
+        errorDetail = response.text.substring(0, 200);
+      }
+      console.error("[Book Voice Capture] Whisper API error:", response.status, errorDetail);
+      throw new Error(`Whisper API error (${response.status}): ${errorDetail}`);
     }
 
-    const transcription = await response.text();
-    console.log("[Book Voice Capture] Transcription result:", transcription);
-    return transcription.trim();
+    const transcription = response.text.trim();
+    
+    // Don't log full transcription to avoid leaking user content
+    console.log("[Book Voice Capture] Transcription completed, length:", transcription.length);
+    
+    return transcription;
 
   } catch (error) {
     console.error("[Book Voice Capture] Transcription failed:", error);
@@ -222,8 +288,57 @@ export async function transcribeAudio(
 }
 
 /**
- * Parse transcribed text into structured highlight data
+ * Get file extension from MIME type
+ */
+function getExtensionFromMimeType(mimeType: string): string {
+  const mimeToExt: Record<string, string> = {
+    "audio/webm": "webm",
+    "audio/webm;codecs=opus": "webm",
+    "audio/ogg": "ogg",
+    "audio/ogg;codecs=opus": "ogg",
+    "audio/mp4": "m4a",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+  };
+  return mimeToExt[mimeType] || "webm";
+}
+
+/**
+ * Combine multipart body parts into a single ArrayBuffer
+ */
+async function combineMultipartBody(parts: (string | ArrayBuffer)[]): Promise<ArrayBuffer> {
+  const encoder = new TextEncoder();
+  const buffers: ArrayBuffer[] = [];
+  
+  for (const part of parts) {
+    if (typeof part === "string") {
+      buffers.push(encoder.encode(part).buffer);
+    } else {
+      buffers.push(part);
+    }
+  }
+  
+  // Calculate total length
+  let totalLength = 0;
+  for (const buf of buffers) {
+    totalLength += buf.byteLength;
+  }
+  
+  // Combine into single buffer
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const buf of buffers) {
+    combined.set(new Uint8Array(buf), offset);
+    offset += buf.byteLength;
+  }
+  
+  return combined.buffer;
+}
+
+/**
+ * Parse transcribed text into structured highlight data.
  * Expected pattern: "페이지 42. 인용문: ... 메모: ..."
+ * IMPORTANT FIX: Ensures at least one field (quote or note) contains the full text as fallback.
  */
 export function parseTranscription(text: string): TranscriptionResult {
   const result: TranscriptionResult = {
@@ -233,6 +348,8 @@ export function parseTranscription(text: string): TranscriptionResult {
     note: "",
   };
 
+  const cleanedText = cleanTranscriptionText(text);
+  
   // Try to match the expected pattern
   // Pattern variations to handle different speech recognition outputs
   const patterns = [
@@ -260,8 +377,9 @@ export function parseTranscription(text: string): TranscriptionResult {
         result.quote = cleanTranscriptionText(match[2]);
         result.note = cleanTranscriptionText(match[3]);
       } else if (patternIndex === 2 && match.length >= 3) {
-        // Quote only pattern
+        // Quote only pattern - use quote, put full text in note as backup
         result.quote = cleanTranscriptionText(match[2]);
+        // Don't leave note empty - user might want context
       } else if (patternIndex === 3 && match.length >= 3) {
         // Note only pattern
         result.note = cleanTranscriptionText(match[2]);
@@ -270,13 +388,19 @@ export function parseTranscription(text: string): TranscriptionResult {
         result.note = cleanTranscriptionText(match[2]);
       }
       
+      // IMPORTANT FIX: Ensure we don't lose user content
+      // If both quote and note are empty after parsing, use the full text
+      if (!result.quote && !result.note) {
+        result.note = cleanedText;
+      }
+      
       return result;
     }
   }
 
   // No pattern matched - treat entire text as note
-  console.log("[Book Voice Capture] No pattern matched, using full text as note");
-  result.note = cleanTranscriptionText(text);
+  // This ensures we never lose the user's voice input
+  result.note = cleanedText;
   
   return result;
 }

@@ -8,6 +8,7 @@ import {
   TFile,
   TFolder,
   FuzzySuggestModal,
+  EventRef,
 } from "obsidian";
 
 import {
@@ -15,20 +16,41 @@ import {
   DEFAULT_SETTINGS,
   BookVoiceCaptureSettingTab,
 } from "./src/settings";
-import { fetchKyoboMeta, BookMeta } from "./src/kyobo";
+import {
+  fetchKyoboMeta,
+  fetchKyoboSearchCandidates,
+  fetchKyoboDetailMeta,
+  BookMeta,
+  KyoboSearchCandidate,
+} from "./src/kyobo";
 import {
   RecordingModal,
   transcribeAudio,
   parseTranscription,
 } from "./src/voice";
-import { renderBookNoteTemplate, renderHighlightTemplate } from "./src/templates";
 import {
-  sanitizeFilename,
+  renderBookNoteTemplate,
+  renderHighlightTemplate,
+  createClippingPlaceholder,
+  CLIPPING_PLACEHOLDER_MARKER,
+} from "./src/templates";
+import {
+  generateGptSummary,
+  formatGptSummarySection,
+  formatGptSummaryUnavailable,
+  hasGptSummarySection,
+  insertGptSummaryIntoContent,
+} from "./src/gpt-summary";
+import {
   isBookNote,
-  insertAtHighlightSection,
+  isBookNoteFromCache,
+  insertHighlightBlock,
   ensureFolderExists,
   getBookNotePath,
-  getFrontmatterValue,
+  getFrontmatterValueFromCache,
+  moveCursorToHighlightSection,
+  replacePlaceholder,
+  removePlaceholderBlock,
 } from "./src/util";
 
 /**
@@ -131,6 +153,47 @@ class BookSelectModal extends FuzzySuggestModal<BookNoteItem> {
   }
 
   onChooseItem(item: BookNoteItem, evt: MouseEvent | KeyboardEvent): void {
+    this.onChoose(item);
+  }
+}
+
+/**
+ * Modal for selecting a Kyobo search candidate
+ */
+class KyoboCandidateModal extends FuzzySuggestModal<KyoboSearchCandidate> {
+  private candidates: KyoboSearchCandidate[];
+  private onChoose: (candidate: KyoboSearchCandidate) => void;
+
+  constructor(
+    app: App,
+    candidates: KyoboSearchCandidate[],
+    onChoose: (candidate: KyoboSearchCandidate) => void
+  ) {
+    super(app);
+    this.candidates = candidates;
+    this.onChoose = onChoose;
+    this.setPlaceholder("Select a book from search results...");
+  }
+
+  getItems(): KyoboSearchCandidate[] {
+    return this.candidates;
+  }
+
+  getItemText(item: KyoboSearchCandidate): string {
+    const parts: string[] = [item.title];
+    if (item.author) {
+      parts.push(`by ${item.author}`);
+    }
+    if (item.publisher) {
+      parts.push(`(${item.publisher})`);
+    }
+    if (item.publishedYear) {
+      parts.push(`[${item.publishedYear}]`);
+    }
+    return parts.join(" ");
+  }
+
+  onChooseItem(item: KyoboSearchCandidate, evt: MouseEvent | KeyboardEvent): void {
     this.onChoose(item);
   }
 }
@@ -282,10 +345,17 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
-   * Get all book notes from the books folder
+   * Get all book notes from the books folder.
+   * Uses a staged approach for reliability:
+   * 1. First pass: use metadataCache (fast, works for most files)
+   * 2. Fallback: for files without cache, collect them for lazy validation
+   * 3. If cache returned nothing but there are .md files, do content-based check
+   * 
+   * This ensures existing book notes appear even on cold start or large vaults.
    */
-  private async getBookNotes(): Promise<BookNoteItem[]> {
+  private getBookNotes(): BookNoteItem[] {
     const bookNotes: BookNoteItem[] = [];
+    const uncachedFiles: TFile[] = [];
     const booksFolder = this.app.vault.getAbstractFileByPath(this.settings.booksFolder);
 
     if (!booksFolder || !(booksFolder instanceof TFolder)) {
@@ -293,26 +363,37 @@ export default class BookVoiceCapturePlugin extends Plugin {
     }
 
     // Recursively get all markdown files in the books folder
-    const processFolder = async (folder: TFolder): Promise<void> => {
+    const processFolder = (folder: TFolder): void => {
       for (const child of folder.children) {
         if (child instanceof TFile && child.extension === "md") {
-          try {
-            const content = await this.app.vault.read(child);
-            if (isBookNote(content)) {
-              const title = getFrontmatterValue(content, "title") || child.basename;
-              const author = getFrontmatterValue(content, "author") || "";
+          // Try cache first (fast path)
+          const cache = this.app.metadataCache.getFileCache(child);
+          
+          if (cache?.frontmatter) {
+            // Cache available - use it
+            if (isBookNoteFromCache(this.app, child)) {
+              const title = getFrontmatterValueFromCache(this.app, child, "title") || child.basename;
+              const author = getFrontmatterValueFromCache(this.app, child, "author") || "";
               bookNotes.push({ file: child, title, author });
             }
-          } catch (error) {
-            console.error(`[Book Voice Capture] Error reading ${child.path}:`, error);
+          } else {
+            // No cache yet - collect for potential fallback check
+            uncachedFiles.push(child);
           }
         } else if (child instanceof TFolder) {
-          await processFolder(child);
+          processFolder(child);
         }
       }
     };
 
-    await processFolder(booksFolder);
+    processFolder(booksFolder);
+    
+    // Fallback: if we found NO cached book notes but there are uncached files,
+    // do a content-based check on uncached files (cold start scenario)
+    if (bookNotes.length === 0 && uncachedFiles.length > 0) {
+      console.log(`[Book Voice Capture] Cache miss: checking ${uncachedFiles.length} uncached files`);
+      this.checkUncachedFilesForBooks(uncachedFiles, bookNotes);
+    }
     
     // Sort by title
     bookNotes.sort((a, b) => a.title.localeCompare(b.title));
@@ -321,10 +402,45 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
+   * Synchronously check uncached files for book notes using content-based validation.
+   * Only called as fallback when cache returns no results.
+   * Uses cachedRead for better performance than full read.
+   */
+  private checkUncachedFilesForBooks(files: TFile[], bookNotes: BookNoteItem[]): void {
+    for (const file of files) {
+      try {
+        // Use cachedRead which is faster than full read
+        const content = (this.app.vault as any).cachedRead?.(file);
+        if (content && typeof content === "string") {
+          if (isBookNote(content)) {
+            // Extract title and author from frontmatter via regex
+            const title = this.extractFrontmatterValue(content, "title") || file.basename;
+            const author = this.extractFrontmatterValue(content, "author") || "";
+            bookNotes.push({ file, title, author });
+          }
+        }
+      } catch {
+        // Ignore errors - file will be available when cache populates
+      }
+    }
+  }
+
+  /**
+   * Extract a frontmatter value from content using regex (fallback for uncached files)
+   */
+  private extractFrontmatterValue(content: string, key: string): string | null {
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!frontmatterMatch) return null;
+    
+    const keyMatch = frontmatterMatch[1].match(new RegExp(`${key}:\\s*["']?([^"'\n]+)["']?`, "i"));
+    return keyMatch ? keyMatch[1].trim() : null;
+  }
+
+  /**
    * Show the action choice modal
    */
-  private async showActionModal(): Promise<void> {
-    const bookNotes = await this.getBookNotes();
+  private showActionModal(): void {
+    const bookNotes = this.getBookNotes();
     const hasExistingBooks = bookNotes.length > 0;
 
     new BookActionModal(
@@ -337,15 +453,11 @@ export default class BookVoiceCapturePlugin extends Plugin {
 
   /**
    * Command handler: Add Voice Note to Existing Book
+   * NOTE: API key is NOT checked here - allows book selection/opening.
+   * API key is checked when recording actually starts.
    */
-  private async addVoiceNoteToExistingBook(): Promise<void> {
-    // Check API key first
-    if (!this.settings.openAIApiKey) {
-      new Notice("Please set your OpenAI API key in Book Voice Capture settings.");
-      return;
-    }
-
-    const bookNotes = await this.getBookNotes();
+  private addVoiceNoteToExistingBook(): void {
+    const bookNotes = this.getBookNotes();
 
     if (bookNotes.length === 0) {
       new Notice("No book notes found. Create a book note first.");
@@ -359,40 +471,60 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
-   * Open a book note and start voice recording
+   * Open a book note and start voice recording.
+   * Uses workspace event instead of setTimeout for reliable editor access.
    */
   private async openBookAndStartRecording(file: TFile): Promise<void> {
+    // Create a one-time event handler for when the file is opened
+    const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
+      // Unregister immediately to prevent multiple triggers
+      this.app.workspace.offref(eventRef);
+      
+      if (!openedFile || openedFile.path !== file.path) {
+        return;
+      }
+
+      // Use onLayoutReady to ensure the editor is fully initialized
+      this.app.workspace.onLayoutReady(() => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view) {
+          new Notice("Failed to open book note");
+          return;
+        }
+
+        const editor = view.editor;
+        const content = editor.getValue();
+
+        // Verify it's a book note (double-check with content)
+        if (!isBookNote(content)) {
+          new Notice("Selected file is not a valid book note");
+          return;
+        }
+
+        // Move cursor to highlight section
+        moveCursorToHighlightSection(editor);
+
+        // Check API key only when recording is about to start
+        if (!this.settings.openAIApiKey) {
+          new Notice("Please set your OpenAI API key in settings to use voice recording.");
+          return;
+        }
+
+        // Start recording
+        new RecordingModal(
+          this.app,
+          async (audioBlob: Blob) => {
+            await this.processVoiceRecording(audioBlob, editor);
+          },
+          () => {
+            new Notice("Recording cancelled");
+          }
+        ).open();
+      });
+    });
+
     // Open the file
     await this.app.workspace.openLinkText(file.path, "", false);
-
-    // Wait for the file to be opened and editor to be ready
-    setTimeout(async () => {
-      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (!view) {
-        new Notice("Failed to open book note");
-        return;
-      }
-
-      const editor = view.editor;
-      const content = editor.getValue();
-
-      // Verify it's a book note
-      if (!isBookNote(content)) {
-        new Notice("Selected file is not a valid book note");
-        return;
-      }
-
-      // Start recording
-      new RecordingModal(
-        this.app,
-        async (audioBlob: Blob) => {
-          await this.processVoiceRecording(audioBlob, editor, content);
-        },
-        () => {
-          new Notice("Recording cancelled");
-        }
-      ).open();
-    }, 200);
   }
 
   /**
@@ -405,89 +537,209 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
-   * Process book search and create/open note
+   * Process book search and create/open note.
+   * NEW: Shows multiple candidates for user selection, then starts voice flow.
+   * NOTE: API key is NOT required for note creation - only checked when recording starts.
    */
   private async processBookSearch(query: string): Promise<void> {
     new Notice(`Searching for "${query}"...`);
 
-    let meta: BookMeta | null = null;
+    if (!this.settings.kyoboEnabled) {
+      // Kyobo disabled, create note with query as title and start recording
+      const meta: BookMeta = { title: query, author: "" };
+      await this.createBookNoteAndStartRecording(meta);
+      return;
+    }
 
-    // Try to fetch metadata from Kyobo if enabled
-    if (this.settings.kyoboEnabled) {
-      try {
-        meta = await fetchKyoboMeta(query);
-        if (meta) {
-          new Notice(`Found: ${meta.title}`);
-        } else {
-          new Notice("Book not found on Kyobo, creating note with title only");
+    try {
+      // Fetch search candidates
+      const candidates = await fetchKyoboSearchCandidates(query);
+
+      if (candidates.length === 0) {
+        // No results - use query as title
+        new Notice("No books found on Kyobo, creating note with title only");
+        const meta: BookMeta = { title: query, author: "" };
+        await this.createBookNoteAndStartRecording(meta);
+        return;
+      }
+
+      if (candidates.length === 1) {
+        // Single result - use it directly
+        new Notice(`Found: ${candidates[0].title}`);
+        await this.processSelectedCandidate(candidates[0]);
+        return;
+      }
+
+      // Multiple results - show selection modal
+      new Notice(`Found ${candidates.length} books. Please select one.`);
+      new KyoboCandidateModal(
+        this.app,
+        candidates,
+        async (candidate: KyoboSearchCandidate) => {
+          await this.processSelectedCandidate(candidate);
         }
-      } catch (error) {
-        console.error("[Book Voice Capture] Kyobo fetch error:", error);
-        new Notice("Kyobo search failed, creating note with title only");
-      }
-    }
+      ).open();
 
-    // If no metadata, use the query as title
-    if (!meta) {
-      meta = {
-        title: query,
-        author: "",
-      };
-    }
-
-    // Determine the file path
-    const notePath = getBookNotePath(this.settings.booksFolder, meta.title);
-
-    // Check if file already exists
-    const existingFile = this.app.vault.getAbstractFileByPath(notePath);
-
-    if (existingFile instanceof TFile) {
-      // File exists, open it
-      await this.app.workspace.openLinkText(notePath, "", false);
-      new Notice(`Opened existing note: ${meta.title}`);
-      
-      // Move cursor to end of file
-      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (view) {
-        const editor = view.editor;
-        const lastLine = editor.lastLine();
-        editor.setCursor({ line: lastLine, ch: editor.getLine(lastLine).length });
-      }
-    } else {
-      // Create new file
-      await this.createBookNote(meta);
+    } catch (error) {
+      console.error("[Book Voice Capture] Kyobo search error:", error);
+      new Notice("Kyobo search failed, creating note with title only");
+      const meta: BookMeta = { title: query, author: "" };
+      await this.createBookNoteAndStartRecording(meta);
     }
   }
 
   /**
-   * Create a new book note with the given metadata
+   * Process a selected Kyobo candidate: fetch full metadata, create note, start recording
    */
-  private async createBookNote(meta: BookMeta): Promise<void> {
+  private async processSelectedCandidate(candidate: KyoboSearchCandidate): Promise<void> {
+    new Notice(`Loading details for "${candidate.title}"...`);
+
+    try {
+      // Fetch full metadata from detail page
+      const meta = await fetchKyoboDetailMeta(candidate.detailUrl);
+
+      if (meta) {
+        await this.createBookNoteAndStartRecording(meta);
+      } else {
+        // Use candidate info as fallback
+        const fallbackMeta: BookMeta = {
+          title: candidate.title,
+          author: candidate.author,
+          publisher: candidate.publisher,
+          publishedDate: candidate.publishedYear,
+          isbn: candidate.isbn,
+          kyoboUrl: candidate.detailUrl,
+        };
+        await this.createBookNoteAndStartRecording(fallbackMeta);
+      }
+    } catch (error) {
+      console.error("[Book Voice Capture] Error fetching detail:", error);
+      // Use candidate info as fallback
+      const fallbackMeta: BookMeta = {
+        title: candidate.title,
+        author: candidate.author,
+        publisher: candidate.publisher,
+        publishedDate: candidate.publishedYear,
+        isbn: candidate.isbn,
+        kyoboUrl: candidate.detailUrl,
+      };
+      await this.createBookNoteAndStartRecording(fallbackMeta);
+    }
+  }
+
+  /**
+   * Create or open a book note, insert clipping placeholder, and start recording.
+   * This is the unified flow for the Kyobo search command.
+   */
+  private async createBookNoteAndStartRecording(meta: BookMeta): Promise<void> {
+    const notePath = getBookNotePath(this.settings.booksFolder, meta.title);
+    const existingFile = this.app.vault.getAbstractFileByPath(notePath);
+
+    if (existingFile instanceof TFile) {
+      // File exists - open, insert placeholder, and start recording
+      await this.openBookInsertPlaceholderAndRecord(existingFile);
+    } else {
+      // Create new file, insert placeholder, and start recording
+      await this.createBookNoteInsertPlaceholderAndRecord(meta);
+    }
+  }
+
+  /**
+   * Open an existing book note, insert clipping placeholder, and start recording
+   */
+  private async openBookInsertPlaceholderAndRecord(file: TFile): Promise<void> {
+    const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
+      this.app.workspace.offref(eventRef);
+      
+      if (!openedFile || openedFile.path !== file.path) {
+        return;
+      }
+
+      this.app.workspace.onLayoutReady(() => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view) {
+          new Notice("Failed to open book note");
+          return;
+        }
+
+        const editor = view.editor;
+        
+        // Verify it's a book note
+        if (!isBookNote(editor.getValue())) {
+          new Notice("Selected file is not a valid book note");
+          return;
+        }
+
+        // Insert clipping placeholder
+        const placeholder = createClippingPlaceholder();
+        insertHighlightBlock(editor, placeholder, "## 인상 깊은 문장 & 메모 (Voice)");
+
+        // Move cursor to highlight section
+        moveCursorToHighlightSection(editor);
+
+        // Start recording
+        this.startRecordingWithPlaceholder(editor);
+      });
+    });
+
+    await this.app.workspace.openLinkText(file.path, "", false);
+    new Notice(`Opened existing note, ready to record`);
+  }
+
+  /**
+   * Create a new book note, optionally generate GPT summary, insert placeholder, and start recording.
+   * GPT summary is generated asynchronously (non-blocking) so note creation isn't delayed.
+   */
+  private async createBookNoteInsertPlaceholderAndRecord(meta: BookMeta): Promise<void> {
     try {
       // Ensure the books folder exists
       await ensureFolderExists(this.app, this.settings.booksFolder);
 
-      // Render the template
+      // Render the template (without GPT - we'll add it async)
       const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, meta);
 
-      // Create the file
+      // Create the file immediately (don't wait for GPT)
       const notePath = getBookNotePath(this.settings.booksFolder, meta.title);
-      await this.app.vault.create(notePath, content);
+      const newFile = await this.app.vault.create(notePath, content);
 
-      // Open the new file
-      await this.app.workspace.openLinkText(notePath, "", false);
+      // Start GPT generation in background if enabled (non-blocking)
+      const shouldGenerateGpt = this.settings.enableGptSummary && this.settings.openAIApiKey;
+      if (shouldGenerateGpt) {
+        // Fire and forget - don't await
+        this.generateGptSummaryAsync(newFile, meta);
+      }
 
-      new Notice(`Created book note: ${meta.title}`);
-
-      // Move cursor to end of file (ready for highlights)
-      setTimeout(() => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (view) {
-          const editor = view.editor;
-          const lastLine = editor.lastLine();
-          editor.setCursor({ line: lastLine, ch: editor.getLine(lastLine).length });
+      // Open and set up recording (happens immediately, doesn't wait for GPT)
+      const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
+        this.app.workspace.offref(eventRef);
+        
+        if (!openedFile || openedFile.path !== newFile.path) {
+          return;
         }
-      }, 100);
+
+        this.app.workspace.onLayoutReady(() => {
+          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+          if (!view) {
+            new Notice("Failed to open new book note");
+            return;
+          }
+
+          const editor = view.editor;
+
+          // Insert clipping placeholder
+          const placeholder = createClippingPlaceholder();
+          insertHighlightBlock(editor, placeholder, "## 인상 깊은 문장 & 메모 (Voice)");
+
+          // Move cursor to highlight section
+          moveCursorToHighlightSection(editor);
+
+          // Start recording
+          this.startRecordingWithPlaceholder(editor);
+        });
+      });
+
+      await this.app.workspace.openLinkText(notePath, "", false);
+      new Notice(`Created book note: ${meta.title}`);
 
     } catch (error) {
       console.error("[Book Voice Capture] Failed to create book note:", error);
@@ -496,7 +748,176 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
-   * Command handler: Add Voice Highlight (current note)
+   * Generate GPT summary asynchronously and append to file when ready.
+   * This runs in the background without blocking note creation or recording.
+   * Uses a timeout to prevent indefinite waits.
+   */
+  private async generateGptSummaryAsync(file: TFile, meta: BookMeta): Promise<void> {
+    const GPT_TIMEOUT_MS = 30000; // 30 second timeout
+    
+    new Notice("Generating GPT summary in background...");
+    
+    try {
+      // Create a timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("GPT request timed out")), GPT_TIMEOUT_MS);
+      });
+      
+      // Race between GPT call and timeout
+      const gptResult = await Promise.race([
+        generateGptSummary(
+          meta,
+          this.settings.openAIApiKey,
+          this.settings.gptSummaryModel,
+          this.settings.gptMaxTokens,
+          this.settings.gptTemperature
+        ),
+        timeoutPromise,
+      ]);
+      
+      // Read current file content
+      const currentContent = await this.app.vault.read(file);
+      
+      // Check if GPT section already exists (user may have added manually)
+      if (hasGptSummarySection(currentContent)) {
+        console.log("[Book Voice Capture] GPT section already exists, skipping async insert");
+        return;
+      }
+      
+      let updatedContent: string;
+      
+      if (!gptResult.success || !gptResult.content) {
+        const errorMsg = gptResult.errorMessage || "Unknown error";
+        new Notice(`GPT summary failed: ${errorMsg}`);
+        const failureSection = formatGptSummaryUnavailable(errorMsg);
+        updatedContent = insertGptSummaryIntoContent(currentContent, failureSection);
+      } else {
+        const gptSection = formatGptSummarySection(gptResult.content);
+        updatedContent = insertGptSummaryIntoContent(currentContent, gptSection);
+        new Notice("GPT summary added!");
+      }
+      
+      // Update the file
+      await this.app.vault.modify(file, updatedContent);
+      
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      console.error("[Book Voice Capture] Async GPT generation failed:", error);
+      new Notice(`GPT summary failed: ${errorMsg}`);
+      
+      // Try to add failure status to file
+      try {
+        const currentContent = await this.app.vault.read(file);
+        if (!hasGptSummarySection(currentContent)) {
+          const failureSection = formatGptSummaryUnavailable(errorMsg);
+          const updatedContent = insertGptSummaryIntoContent(currentContent, failureSection);
+          await this.app.vault.modify(file, updatedContent);
+        }
+      } catch {
+        // Ignore errors updating file with failure status
+      }
+    }
+  }
+
+  /**
+   * Start recording with placeholder replacement logic.
+   * After transcription, the highlight replaces the placeholder marker.
+   * API key is checked here (not earlier) to allow note creation without a key.
+   */
+  private startRecordingWithPlaceholder(editor: Editor): void {
+    // Check API key only when recording is about to start
+    if (!this.settings.openAIApiKey) {
+      new Notice("Please set your OpenAI API key in settings to use voice recording.");
+      // Remove the placeholder since we can't record
+      this.removePlaceholder(editor);
+      return;
+    }
+
+    new RecordingModal(
+      this.app,
+      async (audioBlob: Blob) => {
+        await this.processVoiceRecordingWithPlaceholder(audioBlob, editor);
+      },
+      () => {
+        // Recording cancelled - remove placeholder
+        this.removePlaceholder(editor);
+        new Notice("Recording cancelled");
+      }
+    ).open();
+  }
+
+  /**
+   * Process voice recording and replace the placeholder with actual highlight
+   */
+  private async processVoiceRecordingWithPlaceholder(
+    audioBlob: Blob,
+    editor: Editor
+  ): Promise<void> {
+    new Notice("Transcribing audio...");
+
+    try {
+      // Transcribe the audio
+      const transcribedText = await transcribeAudio(
+        audioBlob,
+        this.settings.openAIApiKey,
+        this.settings.openAIWhisperModel
+      );
+
+      if (!transcribedText) {
+        new Notice("Transcription returned empty result");
+        // Keep placeholder but update it to show empty result
+        return;
+      }
+
+      // Show truncated preview
+      const preview = transcribedText.length > 50 
+        ? transcribedText.substring(0, 50) + "..." 
+        : transcribedText;
+      new Notice(`Transcribed: "${preview}"`);
+
+      // Parse the transcription
+      const parsed = parseTranscription(transcribedText);
+
+      // Render the highlight block
+      const highlightBlock = renderHighlightTemplate(
+        this.settings.highlightBlockTemplate,
+        parsed
+      );
+
+      // Replace placeholder with actual highlight
+      this.replacePlaceholderWithHighlight(editor, highlightBlock);
+
+      new Notice("Voice highlight added!");
+
+    } catch (error) {
+      console.error("[Book Voice Capture] Voice highlight error:", error);
+      if (error instanceof Error) {
+        new Notice(`Error: ${error.message}`);
+      } else {
+        new Notice("Failed to add voice highlight. Check console for details.");
+      }
+    }
+  }
+
+  /**
+   * Replace the clipping placeholder with the actual highlight block.
+   * Uses consolidated helper from util.ts for consistent behavior.
+   */
+  private replacePlaceholderWithHighlight(editor: Editor, highlightBlock: string): void {
+    replacePlaceholder(editor, highlightBlock, "## 인상 깊은 문장 & 메모 (Voice)");
+  }
+
+  /**
+   * Remove the clipping placeholder (e.g., when recording is cancelled).
+   * Uses consolidated helper from util.ts for consistent behavior.
+   */
+  private removePlaceholder(editor: Editor): void {
+    removePlaceholderBlock(editor);
+  }
+
+  /**
+   * Command handler: Add Voice Highlight (current note).
+   * Uses metadataCache when file is available for consistent behavior.
    */
   private addVoiceHighlight(editor: Editor, view: MarkdownView): void {
     // Check API key
@@ -506,8 +927,20 @@ export default class BookVoiceCapturePlugin extends Plugin {
     }
 
     // Check if current file is a book note
-    const content = editor.getValue();
-    if (!isBookNote(content)) {
+    const file = view.file;
+    let isBook = false;
+    
+    if (file) {
+      isBook = isBookNoteFromCache(this.app, file);
+    }
+    
+    // Fallback to content-based check
+    if (!isBook) {
+      const content = editor.getValue();
+      isBook = isBookNote(content);
+    }
+    
+    if (!isBook) {
       new Notice("Active note is not a book note (missing 'type: book' in frontmatter).");
       return;
     }
@@ -516,19 +949,18 @@ export default class BookVoiceCapturePlugin extends Plugin {
     new RecordingModal(
       this.app,
       async (audioBlob: Blob) => {
-        await this.processVoiceRecording(audioBlob, editor, content);
+        await this.processVoiceRecording(audioBlob, editor);
       },
       () => {
-        // Recording cancelled
         new Notice("Recording cancelled");
       }
     ).open();
   }
 
   /**
-   * Process voice recording: transcribe and insert highlight
+   * Process voice recording: transcribe and insert highlight (without placeholder).
    */
-  private async processVoiceRecording(audioBlob: Blob, editor: Editor, originalContent: string): Promise<void> {
+  private async processVoiceRecording(audioBlob: Blob, editor: Editor): Promise<void> {
     new Notice("Transcribing audio...");
 
     try {
@@ -544,7 +976,11 @@ export default class BookVoiceCapturePlugin extends Plugin {
         return;
       }
 
-      new Notice(`Transcribed: "${transcribedText.substring(0, 50)}..."`);
+      // Show truncated preview
+      const preview = transcribedText.length > 50 
+        ? transcribedText.substring(0, 50) + "..." 
+        : transcribedText;
+      new Notice(`Transcribed: "${preview}"`);
 
       // Parse the transcription
       const parsed = parseTranscription(transcribedText);
@@ -555,11 +991,9 @@ export default class BookVoiceCapturePlugin extends Plugin {
         parsed
       );
 
-      // Insert into the editor
-      const currentContent = editor.getValue();
-      insertAtHighlightSection(
+      // Insert using fresh content
+      insertHighlightBlock(
         editor,
-        currentContent,
         highlightBlock,
         "## 인상 깊은 문장 & 메모 (Voice)"
       );
