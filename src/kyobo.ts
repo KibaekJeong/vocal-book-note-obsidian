@@ -846,7 +846,7 @@ function extractMetaFromJsonLd(html: string): Partial<BookMeta> | null {
       const items = Array.isArray(jsonData) ? jsonData : [jsonData];
       
       for (const item of items) {
-        const itemType = item["@type"];
+        const itemType = getJsonLdValue(item, "@type");
         
         // Only process Book or Product types
         if (itemType !== "Book" && itemType !== "Product" && itemType !== "CreativeWork") {
@@ -854,55 +854,83 @@ function extractMetaFromJsonLd(html: string): Partial<BookMeta> | null {
         }
         
         // Title
-        if (item.name && !meta.title) {
-          meta.title = cleanText(String(item.name));
+        const titleValue = getJsonLdValue(item, "name");
+        if (titleValue && !meta.title) {
+          meta.title = cleanText(String(titleValue));
         }
         
         // Author
-        if (item.author && !meta.author) {
-          meta.author = extractAuthor(item.author);
+        const authorValue = getJsonLdValue(item, "author");
+        if (authorValue && !meta.author) {
+          meta.author = extractAuthor(authorValue);
         }
         
         // Publisher
-        if (item.publisher && !meta.publisher) {
-          meta.publisher = extractPublisher(item.publisher);
+        const publisherValue = getJsonLdValue(item, "publisher");
+        if (publisherValue && !meta.publisher) {
+          meta.publisher = extractPublisher(publisherValue);
         }
         
         // Published date
-        if (item.datePublished && !meta.publishedDate) {
-          meta.publishedDate = String(item.datePublished);
+        const dateValue = getJsonLdValue(item, "datePublished");
+        if (dateValue && !meta.publishedDate) {
+          meta.publishedDate = cleanText(String(dateValue));
+        }
+
+        if (!meta.publishedDate) {
+          const workExample = getJsonLdValue(item, "workExample");
+          const workExampleDate = extractWorkExampleDate(workExample);
+          if (workExampleDate) {
+            meta.publishedDate = workExampleDate;
+          }
         }
         
         // ISBN
-        if (item.isbn && !meta.isbn) {
-          meta.isbn = String(item.isbn);
+        const isbnValue = getJsonLdValue(item, "isbn");
+        if (isbnValue && !meta.isbn) {
+          meta.isbn = String(isbnValue);
         }
 
         // Cover image
-        if (item.image && !meta.coverImage) {
-          meta.coverImage = extractFirstString(item.image);
+        const imageValue = getJsonLdValue(item, "image");
+        if (imageValue && !meta.coverImage) {
+          meta.coverImage = extractFirstString(imageValue);
         }
 
         // Description
-        if (item.description && !meta.description) {
-          meta.description = cleanText(String(item.description));
+        const descriptionValue = getJsonLdValue(item, "description");
+        if (descriptionValue && !meta.description) {
+          meta.description = cleanText(String(descriptionValue));
         }
 
         // Genre
-        if (item.genre && !meta.genre) {
-          meta.genre = extractListValue(item.genre);
+        const genreValue = getJsonLdValue(item, "genre");
+        if (genreValue && !meta.genre) {
+          meta.genre = extractListValue(genreValue);
         }
 
         // Topics/keywords
-        if (!meta.topics && (item.about || item.keywords)) {
-          meta.topics = extractListValue(item.about ?? item.keywords);
+        if (!meta.topics) {
+          const aboutValue = getJsonLdValue(item, "about");
+          if (aboutValue) {
+            meta.topics = extractListValue(aboutValue);
+          }
+        }
+        if (!meta.topics) {
+          const keywordsValue = getJsonLdValue(item, "keywords");
+          if (keywordsValue) {
+            meta.topics = extractListValue(keywordsValue);
+          }
         }
 
         // Rating
-        if (!meta.rating && typeof item.aggregateRating === "object" && item.aggregateRating !== null) {
-          const aggregate = item.aggregateRating as Record<string, unknown>;
-          if (aggregate.ratingValue) {
-            meta.rating = String(aggregate.ratingValue);
+        if (!meta.rating) {
+          const aggregateRating = getJsonLdValue(item, "aggregateRating");
+          if (aggregateRating && typeof aggregateRating === "object") {
+            const aggregate = aggregateRating as Record<string, unknown>;
+            if (aggregate.ratingValue) {
+              meta.rating = String(aggregate.ratingValue);
+            }
           }
         }
         
@@ -1202,6 +1230,53 @@ function cleanText(text: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getJsonLdValue(item: unknown, key: string): unknown {
+  if (!item || typeof item !== "object") {
+    return undefined;
+  }
+  const record = item as Record<string, unknown>;
+  if (record[key] !== undefined) {
+    return record[key];
+  }
+  const schemaKey = `schema:${key}`;
+  if (record[schemaKey] !== undefined) {
+    return record[schemaKey];
+  }
+  const atKey = `@${key}`;
+  if (record[atKey] !== undefined) {
+    return record[atKey];
+  }
+  return undefined;
+}
+
+function extractWorkExampleDate(workExample: unknown): string {
+  if (!workExample) {
+    return "";
+  }
+
+  if (Array.isArray(workExample)) {
+    for (const entry of workExample) {
+      const date = extractWorkExampleDate(entry);
+      if (date) {
+        return date;
+      }
+    }
+    return "";
+  }
+
+  if (typeof workExample === "object") {
+    const dateValue =
+      getJsonLdValue(workExample, "datePublished") ||
+      getJsonLdValue(workExample, "availabilityStarts") ||
+      getJsonLdValue(workExample, "startDate");
+    if (dateValue) {
+      return cleanText(String(dateValue));
+    }
+  }
+
+  return "";
 }
 
 function extractFirstString(value: unknown): string {
