@@ -1,0 +1,89 @@
+/* Book Voice Capture Plugin Styles */
+
+.book-voice-capture-recording-modal {
+  padding: 20px;
+}
+
+.book-voice-capture-recording-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.book-voice-capture-recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.1em;
+}
+
+.book-voice-capture-recording-dot {
+  width: 12px;
+  height: 12px;
+  background-color: #e74c3c;
+  border-radius: 50%;
+  animation: book-voice-capture-pulse 1s infinite;
+}
+
+@keyframes book-voice-capture-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.book-voice-capture-timer {
+  font-family: monospace;
+  font-size: 1.5em;
+  color: var(--text-muted);
+}
+
+.book-voice-capture-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.book-voice-capture-stop-btn {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  padding: 8px 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  font-size: 1em;
+}
+
+.book-voice-capture-stop-btn:hover {
+  background-color: var(--interactive-accent-hover);
+}
+
+.book-voice-capture-cancel-btn {
+  background-color: var(--background-modifier-border);
+  color: var(--text-normal);
+  padding: 8px 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  font-size: 1em;
+}
+
+.book-voice-capture-cancel-btn:hover {
+  background-color: var(--background-modifier-border-hover);
+}
+
+/* Settings tab styles */
+.book-voice-capture-settings textarea {
+  width: 100%;
+  min-height: 200px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.book-voice-capture-settings .setting-item-description {
+  white-space: pre-wrap;
+}
+

@@ -1,0 +1,11 @@
+{
+  "id": "book-voice-capture",
+  "name": "Book Voice Capture",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.0",
+  "description": "Create Kyobo-based book notes and add voice highlights via Whisper directly into your Obsidian book notes.",
+  "author": "Kibaek Jeong",
+  "authorUrl": "https://github.com/KibaekJeong",
+  "isDesktopOnly": false
+}
+
