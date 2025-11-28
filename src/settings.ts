@@ -45,20 +45,19 @@ Type: Book
 Area: ""
 Goal: ""
 Status: "reading"
+type: book
+language: "{{language}}"
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
-publishedDate: "{{publishedDate}}"
-isbn: "{{isbn}}"
-cover: "{{coverImage}}"
+Cover: "{{image}}"
 url: "{{kyoboUrl}}"
 Topics: "{{topics}}"
-Genre: "{{genre}}"
+Genre: "{{meta:property:eg:category2_name}}"
 Rating: "{{rating}}"
 'start reading': "{{currentDate}}"
 'end reading': ""
-Description: "{{description}}"
-source: "Kyobo"
+Description: "{{schema:@Book:description}}"
 ---
 
 # {{title}}
@@ -262,7 +261,7 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Book Note Template")
       .setDesc(
-        "Template for new book notes. Available placeholders: {{title}}, {{author}}, {{publisher}}, {{publishedDate}}, {{isbn}}, {{kyoboUrl}}, {{coverImage}}, {{image}}, {{topics}}, {{genre}}, {{rating}}, {{description}}, {{currentDate}}"
+        "Template for new book notes. Available placeholders: {{title}}, {{author}}, {{publisher}}, {{language}}, {{kyoboUrl}}, {{image}}, {{coverImage}}, {{topics}}, {{genre}}, {{meta:property:eg:category2_name}}, {{rating}}, {{description}}, {{schema:@Book:description}}, {{currentDate}}. The plugin will always enforce 'type: book' in the frontmatter even if your template omits it."
       )
       .addTextArea((text: TextAreaComponent) => {
         text

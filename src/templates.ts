@@ -20,14 +20,24 @@ export function renderBookNoteTemplate(template: string, meta: BookMeta): string
     genre: meta.genre || "",
     topics: meta.topics || "",
     rating: meta.rating || "",
+    language: meta.language || "",
     date: today,
     currentDate: today,
   };
 
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+  // Aliases that match Obsidian clipper placeholders
+  replacements["meta:property:eg:category2_name"] = meta.genre || "";
+  replacements["schema:@Book:description"] = meta.description || "";
+
+  let rendered = template.replace(/\{\{([^}]+)\}\}/g, (_, rawKey: string) => {
+    const key = rawKey.trim();
     const value = replacements[key];
     return value !== undefined ? value : "";
   });
+
+  rendered = ensureBookFrontmatter(rendered);
+
+  return rendered;
 }
 
 /**
@@ -138,4 +148,20 @@ export function createClippingPlaceholder(): string {
 - 메모: (녹음 예정)
 - 캡처일: ${date}
 `;
+}
+
+function ensureBookFrontmatter(content: string): string {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+
+  if (!frontmatterMatch) {
+    return `---\ntype: book\n---\n${content}`.trimStart();
+  }
+
+  const body = frontmatterMatch[1];
+  if (/^\s*type\s*:\s*["']?\s*book\s*["']?/im.test(body)) {
+    return content;
+  }
+
+  const updatedFrontmatter = `---\ntype: book\n${body.trim() ? `${body.trim()}\n` : ""}---`;
+  return content.replace(frontmatterMatch[0], `${updatedFrontmatter}`);
 }

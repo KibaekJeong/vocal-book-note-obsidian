@@ -12,6 +12,7 @@ export interface BookMeta {
   genre?: string;
   topics?: string;
   rating?: string;
+  language?: string;
 }
 
 /**

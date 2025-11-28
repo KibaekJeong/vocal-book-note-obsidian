@@ -134,20 +134,19 @@ Type: Book
 Area: ""
 Goal: ""
 Status: "reading"
+type: book
+language: "{{language}}"
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
-published: "{{publishedDate}}"
-isbn: "{{isbn}}"
-cover: "{{coverImage}}"
+Cover: "{{image}}"
 url: "{{kyoboUrl}}"
 Topics: "{{topics}}"
-Genre: "{{genre}}"
+Genre: "{{meta:property:eg:category2_name}}"
 Rating: "{{rating}}"
 'start reading': "{{currentDate}}"
 'end reading': ""
-Description: "{{description}}"
-source: "Kyobo"
+Description: "{{schema:@Book:description}}"
 ---
 
 # {{title}}
@@ -186,14 +185,14 @@ source: "Kyobo"
 - `{{title}}` - Book title
 - `{{author}}` - Author name
 - `{{publisher}}` - Publisher name
-- `{{publishedDate}}` - Publication date
-- `{{isbn}}` - ISBN number
+- `{{language}}` - ISO language code inferred from metadata (`ko` or `en`)
 - `{{kyoboUrl}}` - Kyobo book page URL
 - `{{coverImage}}` / `{{image}}` - Cover image URL
 - `{{topics}}` - Topics or keywords parsed from Kyobo
-- `{{genre}}` - Genre/category information
+- `{{genre}}` or `{{meta:property:eg:category2_name}}` - Genre/category information
 - `{{rating}}` - Kyobo rating (if available)
-- `{{description}}` - Kyobo description/summary
+- `{{description}}` or `{{schema:@Book:description}}` - Kyobo description/summary
+- `type: book` is automatically added even if you omit it
 - `{{currentDate}}` - Today's date (YYYY-MM-DD)
 
 **Highlight Block Template:**

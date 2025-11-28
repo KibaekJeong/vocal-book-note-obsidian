@@ -19,6 +19,13 @@ export interface GptSummaryResult {
  * Build the prompt for GPT to generate book summary, key points, and quotes
  */
 function buildGptPrompt(meta: BookMeta): string {
+  const normalizedLanguage = (meta.language || "").toLowerCase();
+  const isKorean = normalizedLanguage === "ko" || /[가-힣]/.test(meta.title || "");
+  const languageName = isKorean ? "Korean" : "English";
+  const summaryHeader = isKorean ? "요약" : "Summary";
+  const keyPointsHeader = isKorean ? "핵심 포인트" : "Key Points";
+  const quotesHeader = isKorean ? "인용문" : "Quotes";
+  
   const metaLines: string[] = [];
   
   if (meta.title) metaLines.push(`Title: ${meta.title}`);
@@ -30,7 +37,7 @@ function buildGptPrompt(meta: BookMeta): string {
   
   const metaBlock = metaLines.join("\n");
   
-  return `You are a knowledgeable book expert. Given the following book information, provide a comprehensive overview that would help someone understand the book at a glance.
+  return `You are a knowledgeable book expert. Given the following book information, provide a comprehensive overview that would help someone understand the book at a glance. Write your entire response in ${languageName} using natural, fluent phrasing.
 
 BOOK INFORMATION:
 ${metaBlock}
@@ -57,19 +64,19 @@ IMPORTANT:
 - Be concise but substantive (no fluff or filler phrases)
 - Provide enough detail to serve as a meaningful book review
 - If you're not familiar with this specific book, provide a reasonable overview based on the author's known work and typical themes, noting any uncertainty
-- Write in a mix of Korean and English as appropriate for the content (Korean for Korean books, English for English books, or mixed if the book is commonly discussed in both)
+- Write the entire response in ${languageName}. Do not switch languages mid-section.
 
 Format your response EXACTLY as follows (use these exact headers):
 
-### Summary
+### ${summaryHeader}
 [Your 6-10 sentence summary paragraph here]
 
-### Key Points
+### ${keyPointsHeader}
 - [Point 1]
 - [Point 2]
 ...
 
-### Quotes
+### ${quotesHeader}
 > "[Quote 1]" (page X or page unknown)
 > "[Quote 2]" (page X or page unknown)
 ...`;

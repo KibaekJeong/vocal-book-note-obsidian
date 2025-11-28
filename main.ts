@@ -9,6 +9,7 @@ import {
   TFolder,
   FuzzySuggestModal,
   EventRef,
+  normalizePath,
 } from "obsidian";
 
 import {
@@ -381,6 +382,17 @@ export default class BookVoiceCapturePlugin extends Plugin {
     return DEFAULT_SETTINGS.booksFolder;
   }
 
+  private getBaseFolderPath(): string {
+    const folder = this.settings.baseFolder?.trim() || DEFAULT_SETTINGS.baseFolder;
+    return folder.replace(/\/+$/, "");
+  }
+
+  private getBaseFileVaultPath(): string {
+    const baseFolder = this.getBaseFolderPath();
+    const relative = this.settings.baseFilePath?.trim() || DEFAULT_SETTINGS.baseFilePath;
+    return normalizePath(`${baseFolder}/${relative}`);
+  }
+
   /**
    * Get all book notes from the books folder.
    * Uses a staged approach for reliability:
@@ -475,6 +487,114 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   /**
+   * Ensure a BookMeta object has a language code (ko/en) inferred from its metadata.
+   */
+  private ensureBookLanguage(meta: BookMeta): BookMeta {
+    if (meta.language) {
+      return { ...meta, language: this.normalizeLanguageCode(meta.language) ?? "en" };
+    }
+
+    const detectionSource = [meta.title, meta.author, meta.publisher, meta.description]
+      .filter(Boolean)
+      .join(" ");
+    const hasHangul = /[가-힣]/.test(detectionSource);
+    return { ...meta, language: hasHangul ? "ko" : "en" };
+  }
+
+  /**
+   * Infer language from note content or frontmatter.
+   */
+  private inferLanguageFromContent(content: string): string {
+    const frontmatterLanguage = this.normalizeLanguageCode(this.extractFrontmatterValue(content, "language"));
+    if (frontmatterLanguage) {
+      return frontmatterLanguage;
+    }
+    return /[가-힣]/.test(content) ? "ko" : "en";
+  }
+
+  private normalizeLanguageCode(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const normalized = value.trim().toLowerCase();
+    if (normalized.startsWith("ko")) {
+      return "ko";
+    }
+    if (normalized.startsWith("en")) {
+      return "en";
+    }
+    return null;
+  }
+
+  private async ensureBaseFileExists(): Promise<void> {
+    try {
+      const baseFolder = this.getBaseFolderPath();
+      if (!baseFolder) {
+        return;
+      }
+      await ensureFolderExists(this.app, baseFolder);
+
+      const baseFilePath = this.getBaseFileVaultPath();
+      const baseFileDir = baseFilePath.split("/").slice(0, -1).join("/");
+      if (baseFileDir && baseFileDir !== baseFolder) {
+        await ensureFolderExists(this.app, baseFileDir);
+      }
+
+      const existing = this.app.vault.getAbstractFileByPath(baseFilePath);
+      if (existing instanceof TFile) {
+        return;
+      }
+
+      const content = this.buildDefaultBaseFileContent();
+      await this.app.vault.create(baseFilePath, content);
+      console.log(`[Book Voice Capture] Created base file at ${baseFilePath}`);
+    } catch (error) {
+      console.error("[Book Voice Capture] Failed to create base file:", error);
+    }
+  }
+
+  private buildDefaultBaseFileContent(): string {
+    const sourceFolder = this.getBookPagesFolder();
+    const now = new Date().toISOString();
+    const baseData = {
+      version: 1,
+      name: "Book Voice Capture",
+      description: "Auto-generated base that lists every note created by the Book Voice Capture plugin.",
+      icon: "book-open",
+      source: {
+        type: "folder",
+        path: sourceFolder,
+      },
+      filter: {
+        type: "property",
+        property: "type",
+        operator: "equals",
+        value: "book",
+      },
+      views: [
+        {
+          id: "books-table",
+          type: "table",
+          name: "Books",
+          columns: [
+            { property: "title", label: "Title", width: 260 },
+            { property: "author", label: "Author", width: 200 },
+            { property: "publisher", label: "Publisher", width: 200 },
+            { property: "status", label: "Status", width: 120 },
+            { property: "language", label: "Language", width: 100 },
+            { property: "rating", label: "Rating", width: 80 },
+          ],
+          sort: [
+            { property: "title", direction: "asc" },
+          ],
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    return JSON.stringify(baseData, null, 2);
+  }
+
+  /**
    * Show the action choice modal
    */
   private showActionModal(): void {
@@ -542,6 +662,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
         // Move cursor to highlight section
         moveCursorToHighlightSection(editor);
 
+        const language = this.inferLanguageFromContent(content);
+
         // Check API key only when recording is about to start
         if (!this.settings.openAIApiKey) {
           new Notice("Please set your OpenAI API key in settings to use voice recording.");
@@ -552,7 +674,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
         new RecordingModal(
           this.app,
           async (audioBlob: Blob) => {
-            await this.processVoiceRecording(audioBlob, editor);
+            await this.processVoiceRecording(audioBlob, editor, language);
           },
           () => {
             new Notice("Recording cancelled");
@@ -670,7 +792,9 @@ export default class BookVoiceCapturePlugin extends Plugin {
    * This is the unified flow for the Kyobo search command.
    */
   private async createBookNoteAndStartRecording(meta: BookMeta): Promise<void> {
-    const notePath = getBookNotePath(this.getBookPagesFolder(), meta.title);
+    await this.ensureBaseFileExists();
+    const resolvedMeta = this.ensureBookLanguage(meta);
+    const notePath = getBookNotePath(this.getBookPagesFolder(), resolvedMeta.title);
     const existingFile = this.app.vault.getAbstractFileByPath(notePath);
 
     if (existingFile instanceof TFile) {
@@ -678,7 +802,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
       await this.openBookInsertPlaceholderAndRecord(existingFile);
     } else {
       // Create new file, insert placeholder, and start recording
-      await this.createBookNoteInsertPlaceholderAndRecord(meta);
+      await this.createBookNoteInsertPlaceholderAndRecord(resolvedMeta);
     }
   }
 
@@ -701,9 +825,10 @@ export default class BookVoiceCapturePlugin extends Plugin {
         }
 
         const editor = view.editor;
+        const content = editor.getValue();
         
         // Verify it's a book note
-        if (!isBookNote(editor.getValue())) {
+        if (!isBookNote(content)) {
           new Notice("Selected file is not a valid book note");
           return;
         }
@@ -715,8 +840,10 @@ export default class BookVoiceCapturePlugin extends Plugin {
         // Move cursor to highlight section
         moveCursorToHighlightSection(editor);
 
+        const language = this.inferLanguageFromContent(content);
+
         // Start recording
-        this.startRecordingWithPlaceholder(editor);
+        this.startRecordingWithPlaceholder(editor, language);
       });
     });
 
@@ -730,21 +857,22 @@ export default class BookVoiceCapturePlugin extends Plugin {
    */
   private async createBookNoteInsertPlaceholderAndRecord(meta: BookMeta): Promise<void> {
     try {
+      const resolvedMeta = this.ensureBookLanguage(meta);
       // Ensure the books folder exists
       await ensureFolderExists(this.app, this.getBookPagesFolder());
 
       // Render the template (without GPT - we'll add it async)
-      const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, meta);
+      const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, resolvedMeta);
 
       // Create the file immediately (don't wait for GPT)
-      const notePath = getBookNotePath(this.getBookPagesFolder(), meta.title);
+      const notePath = getBookNotePath(this.getBookPagesFolder(), resolvedMeta.title);
       const newFile = await this.app.vault.create(notePath, content);
 
       // Start GPT generation in background if enabled (non-blocking)
       const shouldGenerateGpt = this.settings.enableGptSummary && this.settings.openAIApiKey;
       if (shouldGenerateGpt) {
         // Fire and forget - don't await
-        this.generateGptSummaryAsync(newFile, meta);
+        this.generateGptSummaryAsync(newFile, resolvedMeta);
       }
 
       // Open and set up recording (happens immediately, doesn't wait for GPT)
@@ -772,12 +900,12 @@ export default class BookVoiceCapturePlugin extends Plugin {
           moveCursorToHighlightSection(editor);
 
           // Start recording
-          this.startRecordingWithPlaceholder(editor);
+          this.startRecordingWithPlaceholder(editor, resolvedMeta.language);
         });
       });
 
       await this.app.workspace.openLinkText(notePath, "", false);
-      new Notice(`Created book note: ${meta.title}`);
+      new Notice(`Created book note: ${resolvedMeta.title}`);
 
     } catch (error) {
       console.error("[Book Voice Capture] Failed to create book note:", error);
@@ -862,7 +990,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
    * After transcription, the highlight replaces the placeholder marker.
    * API key is checked here (not earlier) to allow note creation without a key.
    */
-  private startRecordingWithPlaceholder(editor: Editor): void {
+  private startRecordingWithPlaceholder(editor: Editor, language?: string): void {
     // Check API key only when recording is about to start
     if (!this.settings.openAIApiKey) {
       new Notice("Please set your OpenAI API key in settings to use voice recording.");
@@ -871,10 +999,12 @@ export default class BookVoiceCapturePlugin extends Plugin {
       return;
     }
 
+    const targetLanguage = language || this.inferLanguageFromContent(editor.getValue());
+
     new RecordingModal(
       this.app,
       async (audioBlob: Blob) => {
-        await this.processVoiceRecordingWithPlaceholder(audioBlob, editor);
+        await this.processVoiceRecordingWithPlaceholder(audioBlob, editor, targetLanguage);
       },
       () => {
         // Recording cancelled - remove placeholder
@@ -889,7 +1019,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
    */
   private async processVoiceRecordingWithPlaceholder(
     audioBlob: Blob,
-    editor: Editor
+    editor: Editor,
+    language?: string
   ): Promise<void> {
     new Notice("Transcribing audio...");
 
@@ -898,7 +1029,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
       const transcribedText = await transcribeAudio(
         audioBlob,
         this.settings.openAIApiKey,
-        this.settings.openAIWhisperModel
+        this.settings.openAIWhisperModel,
+        language
       );
 
       if (!transcribedText) {
@@ -967,6 +1099,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
     // Check if current file is a book note
     const file = view.file;
     let isBook = false;
+    const content = editor.getValue();
     
     if (file) {
       isBook = isBookNoteFromCache(this.app, file);
@@ -974,7 +1107,6 @@ export default class BookVoiceCapturePlugin extends Plugin {
     
     // Fallback to content-based check
     if (!isBook) {
-      const content = editor.getValue();
       isBook = isBookNote(content);
     }
     
@@ -983,11 +1115,13 @@ export default class BookVoiceCapturePlugin extends Plugin {
       return;
     }
 
+    const language = this.inferLanguageFromContent(content);
+
     // Start recording
     new RecordingModal(
       this.app,
       async (audioBlob: Blob) => {
-        await this.processVoiceRecording(audioBlob, editor);
+        await this.processVoiceRecording(audioBlob, editor, language);
       },
       () => {
         new Notice("Recording cancelled");
@@ -998,7 +1132,11 @@ export default class BookVoiceCapturePlugin extends Plugin {
   /**
    * Process voice recording: transcribe and insert highlight (without placeholder).
    */
-  private async processVoiceRecording(audioBlob: Blob, editor: Editor): Promise<void> {
+  private async processVoiceRecording(
+    audioBlob: Blob,
+    editor: Editor,
+    language?: string
+  ): Promise<void> {
     new Notice("Transcribing audio...");
 
     try {
@@ -1006,7 +1144,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
       const transcribedText = await transcribeAudio(
         audioBlob,
         this.settings.openAIApiKey,
-        this.settings.openAIWhisperModel
+        this.settings.openAIWhisperModel,
+        language
       );
 
       if (!transcribedText) {

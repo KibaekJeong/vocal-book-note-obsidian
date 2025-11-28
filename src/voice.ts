@@ -194,7 +194,8 @@ export class RecordingModal extends Modal {
 export async function transcribeAudio(
   audioBlob: Blob,
   apiKey: string,
-  model: string = "whisper-1"
+  model: string = "whisper-1",
+  language?: string
 ): Promise<string> {
   try {
     // Convert blob to ArrayBuffer
@@ -227,12 +228,13 @@ export async function transcribeAudio(
       `${model}\r\n`
     );
     
-    // Add language field (Korean hint)
-    bodyParts.push(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="language"\r\n\r\n` +
-      `ko\r\n`
-    );
+    if (language && language !== "auto") {
+      bodyParts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="language"\r\n\r\n` +
+        `${language}\r\n`
+      );
+    }
     
     // Add response_format field
     bodyParts.push(

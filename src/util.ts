@@ -176,7 +176,11 @@ export function isBookNote(content: string): boolean {
   
   const frontmatter = frontmatterMatch[1];
   // Case-insensitive match for type: book (with optional quotes and whitespace)
-  return /type:\s*["']?\s*book\s*["']?/i.test(frontmatter);
+  if (/type:\s*["']?\s*book\s*["']?/i.test(frontmatter)) {
+    return true;
+  }
+  // Fallback heuristics for notes created before type was enforced
+  return /\bkyobo\b/i.test(frontmatter) || /kyoboUrl\s*:/i.test(frontmatter);
 }
 
 /**
@@ -188,11 +192,20 @@ export function isBookNoteFromCache(app: App, file: TFile): boolean {
   
   // If cache has frontmatter, check the type field
   if (cache?.frontmatter) {
-    const typeValue = cache.frontmatter.type;
+    const typeValue = cache.frontmatter.type ?? cache.frontmatter.Type;
     if (typeValue !== undefined) {
-      // Normalize: convert to string, lowercase, trim
       const normalized = String(typeValue).toLowerCase().trim();
-      return normalized === "book";
+      if (normalized === "book") {
+        return true;
+      }
+    }
+    if (
+      cache.frontmatter.kyobo !== undefined ||
+      cache.frontmatter.kyoboUrl !== undefined ||
+      cache.frontmatter.cover !== undefined ||
+      cache.frontmatter.Cover !== undefined
+    ) {
+      return true;
     }
   }
   
