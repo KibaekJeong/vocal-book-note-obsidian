@@ -330,7 +330,55 @@ export default class BookVoiceCapturePlugin extends Plugin {
       },
     });
 
+    // Listen for file creation to automatically generate GPT summary
+    this.registerEvent(
+      this.app.vault.on("create", async (file) => {
+        if (file instanceof TFile && file.extension === "md") {
+          // Check if file is in the configured book folder
+          const booksFolder = this.getBookPagesFolder();
+          if (file.parent?.path.startsWith(booksFolder)) {
+            // Wait briefly for file to be fully written/cache populated
+            setTimeout(() => this.processNewBookNote(file), 1000);
+          }
+        }
+      })
+    );
+
     console.log("[Book Voice Capture] Plugin loaded successfully");
+  }
+
+  /**
+   * Process a newly created book note: check if it needs GPT summary
+   */
+  private async processNewBookNote(file: TFile): Promise<void> {
+    if (!this.settings.enableGptSummary || !this.settings.openAIApiKey) {
+      return;
+    }
+
+    const content = await this.app.vault.read(file);
+    
+    // Validate it's likely a book note (has frontmatter or just created in folder)
+    // We trust folder location as primary signal, but double check basic validity
+    if (!content) return;
+
+    // Check if GPT section already exists
+    if (hasGptSummarySection(content)) {
+      return;
+    }
+
+    // Construct metadata for GPT
+    // Try to parse frontmatter, otherwise use filename
+    const title = this.extractFrontmatterValue(content, "title") || file.basename;
+    const author = this.extractFrontmatterValue(content, "author") || "";
+    
+    const meta: BookMeta = {
+      title,
+      author,
+      // Minimal meta is fine for GPT
+    };
+
+    // Generate summary
+    await this.generateGptSummaryAsync(file, meta);
   }
 
   onunload(): void {
@@ -385,12 +433,6 @@ export default class BookVoiceCapturePlugin extends Plugin {
   private getBaseFolderPath(): string {
     const folder = this.settings.baseFolder?.trim() || DEFAULT_SETTINGS.baseFolder;
     return folder.replace(/\/+$/, "");
-  }
-
-  private getBaseFileVaultPath(): string {
-    const baseFolder = this.getBaseFolderPath();
-    const relative = this.settings.baseFilePath?.trim() || DEFAULT_SETTINGS.baseFilePath;
-    return normalizePath(`${baseFolder}/${relative}`);
   }
 
   /**
@@ -524,78 +566,6 @@ export default class BookVoiceCapturePlugin extends Plugin {
     return null;
   }
 
-  private async ensureBaseFileExists(): Promise<void> {
-    try {
-      const baseFolder = this.getBaseFolderPath();
-      if (!baseFolder) {
-        return;
-      }
-      await ensureFolderExists(this.app, baseFolder);
-
-      const baseFilePath = this.getBaseFileVaultPath();
-      const baseFileDir = baseFilePath.split("/").slice(0, -1).join("/");
-      if (baseFileDir && baseFileDir !== baseFolder) {
-        await ensureFolderExists(this.app, baseFileDir);
-      }
-
-      const existing = this.app.vault.getAbstractFileByPath(baseFilePath);
-      if (existing instanceof TFile) {
-        return;
-      }
-
-      const content = this.buildDefaultBaseFileContent();
-      await this.app.vault.create(baseFilePath, content);
-      console.log(`[Book Voice Capture] Created base file at ${baseFilePath}`);
-    } catch (error) {
-      console.error("[Book Voice Capture] Failed to create base file:", error);
-    }
-  }
-
-  private buildDefaultBaseFileContent(): string {
-    const sourceFolder = this.getBookPagesFolder();
-    const now = new Date().toISOString();
-    const baseData = {
-      version: 1,
-      name: "Book Voice Capture",
-      description: "Auto-generated base that lists every note created by the Book Voice Capture plugin.",
-      icon: "book-open",
-      source: {
-        type: "folder",
-        path: sourceFolder,
-      },
-      filter: {
-        type: "property",
-        property: "type",
-        operator: "equals",
-        value: "Book",
-      },
-      views: [
-        {
-          id: "book-covers",
-          type: "table",
-          name: "Book Covers",
-          columns: [
-            { property: "Cover", label: "Cover", width: 220 },
-            { property: "title", label: "Title", width: 260 },
-            { property: "author", label: "Author", width: 200 },
-          ],
-          filter: {
-            type: "property",
-            property: "Cover",
-            operator: "is not empty",
-          },
-          sort: [
-            { property: "title", direction: "asc" },
-          ],
-        },
-      ],
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    return JSON.stringify(baseData, null, 2);
-  }
-
   /**
    * Show the action choice modal
    */
@@ -709,7 +679,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
     if (!this.settings.kyoboEnabled) {
       // Kyobo disabled, create note with query as title and start recording
       const meta: BookMeta = { title: query, author: "" };
-      await this.createBookNoteAndStartRecording(meta);
+      await this.createBookNote(meta);
       return;
     }
 
@@ -721,7 +691,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
         // No results - use query as title
         new Notice("No books found on Kyobo, creating note with title only");
         const meta: BookMeta = { title: query, author: "" };
-        await this.createBookNoteAndStartRecording(meta);
+        await this.createBookNote(meta);
         return;
       }
 
@@ -746,7 +716,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
       console.error("[Book Voice Capture] Kyobo search error:", error);
       new Notice("Kyobo search failed, creating note with title only");
       const meta: BookMeta = { title: query, author: "" };
-      await this.createBookNoteAndStartRecording(meta);
+      await this.createBookNote(meta);
     }
   }
 
@@ -761,7 +731,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
       const meta = await fetchKyoboDetailMeta(candidate.detailUrl);
 
       if (meta) {
-        await this.createBookNoteAndStartRecording(meta);
+        await this.createBookNote(meta);
       } else {
         // Use candidate info as fallback
         const fallbackMeta: BookMeta = {
@@ -772,7 +742,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
           isbn: candidate.isbn,
           kyoboUrl: candidate.detailUrl,
         };
-        await this.createBookNoteAndStartRecording(fallbackMeta);
+        await this.createBookNote(fallbackMeta);
       }
     } catch (error) {
       console.error("[Book Voice Capture] Error fetching detail:", error);
@@ -785,129 +755,48 @@ export default class BookVoiceCapturePlugin extends Plugin {
         isbn: candidate.isbn,
         kyoboUrl: candidate.detailUrl,
       };
-      await this.createBookNoteAndStartRecording(fallbackMeta);
+      await this.createBookNote(fallbackMeta);
     }
   }
 
   /**
-   * Create or open a book note, insert clipping placeholder, and start recording.
+   * Create or open a book note.
    * This is the unified flow for the Kyobo search command.
    */
-  private async createBookNoteAndStartRecording(meta: BookMeta): Promise<void> {
-    await this.ensureBaseFileExists();
+  private async createBookNote(meta: BookMeta): Promise<void> {
     const resolvedMeta = this.ensureBookLanguage(meta);
     const notePath = getBookNotePath(this.getBookPagesFolder(), resolvedMeta.title);
     const existingFile = this.app.vault.getAbstractFileByPath(notePath);
 
     if (existingFile instanceof TFile) {
-      // File exists - open, insert placeholder, and start recording
-      await this.openBookInsertPlaceholderAndRecord(existingFile);
+      // File exists - just open it
+      await this.app.workspace.openLinkText(existingFile.path, "", false);
+      new Notice(`Opened existing note: ${resolvedMeta.title}`);
     } else {
-      // Create new file, insert placeholder, and start recording
-      await this.createBookNoteInsertPlaceholderAndRecord(resolvedMeta);
+      // Create new file
+      // GPT summary will be triggered by the "create" event listener
+      await this.createBookNoteFile(resolvedMeta);
     }
   }
 
   /**
-   * Open an existing book note, insert clipping placeholder, and start recording
+   * Create a new book note file
    */
-  private async openBookInsertPlaceholderAndRecord(file: TFile): Promise<void> {
-    const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
-      this.app.workspace.offref(eventRef);
-      
-      if (!openedFile || openedFile.path !== file.path) {
-        return;
-      }
-
-      this.app.workspace.onLayoutReady(() => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view) {
-          new Notice("Failed to open book note");
-          return;
-        }
-
-        const editor = view.editor;
-        const content = editor.getValue();
-        
-        // Verify it's a book note
-        if (!isBookNote(content)) {
-          new Notice("Selected file is not a valid book note");
-          return;
-        }
-
-        // Insert clipping placeholder
-        const placeholder = createClippingPlaceholder();
-        insertHighlightBlock(editor, placeholder, "## 인상 깊은 문장 & 메모 (Voice)");
-
-        // Move cursor to highlight section
-        moveCursorToHighlightSection(editor);
-
-        const language = this.inferLanguageFromContent(content);
-
-        // Start recording
-        this.startRecordingWithPlaceholder(editor, language);
-      });
-    });
-
-    await this.app.workspace.openLinkText(file.path, "", false);
-    new Notice(`Opened existing note, ready to record`);
-  }
-
-  /**
-   * Create a new book note, optionally generate GPT summary, insert placeholder, and start recording.
-   * GPT summary is generated asynchronously (non-blocking) so note creation isn't delayed.
-   */
-  private async createBookNoteInsertPlaceholderAndRecord(meta: BookMeta): Promise<void> {
+  private async createBookNoteFile(meta: BookMeta): Promise<void> {
     try {
-      const resolvedMeta = this.ensureBookLanguage(meta);
       // Ensure the books folder exists
       await ensureFolderExists(this.app, this.getBookPagesFolder());
 
-      // Render the template (without GPT - we'll add it async)
-      const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, resolvedMeta);
+      // Render the template
+      const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, meta);
 
-      // Create the file immediately (don't wait for GPT)
-      const notePath = getBookNotePath(this.getBookPagesFolder(), resolvedMeta.title);
-      const newFile = await this.app.vault.create(notePath, content);
+      // Create the file
+      const notePath = getBookNotePath(this.getBookPagesFolder(), meta.title);
+      await this.app.vault.create(notePath, content);
 
-      // Start GPT generation in background if enabled (non-blocking)
-      const shouldGenerateGpt = this.settings.enableGptSummary && this.settings.openAIApiKey;
-      if (shouldGenerateGpt) {
-        // Fire and forget - don't await
-        this.generateGptSummaryAsync(newFile, resolvedMeta);
-      }
-
-      // Open and set up recording (happens immediately, doesn't wait for GPT)
-      const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
-        this.app.workspace.offref(eventRef);
-        
-        if (!openedFile || openedFile.path !== newFile.path) {
-          return;
-        }
-
-        this.app.workspace.onLayoutReady(() => {
-          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-          if (!view) {
-            new Notice("Failed to open new book note");
-            return;
-          }
-
-          const editor = view.editor;
-
-          // Insert clipping placeholder
-          const placeholder = createClippingPlaceholder();
-          insertHighlightBlock(editor, placeholder, "## 인상 깊은 문장 & 메모 (Voice)");
-
-          // Move cursor to highlight section
-          moveCursorToHighlightSection(editor);
-
-          // Start recording
-          this.startRecordingWithPlaceholder(editor, resolvedMeta.language);
-        });
-      });
-
+      // Open the file
       await this.app.workspace.openLinkText(notePath, "", false);
-      new Notice(`Created book note: ${resolvedMeta.title}`);
+      new Notice(`Created book note: ${meta.title}`);
 
     } catch (error) {
       console.error("[Book Voice Capture] Failed to create book note:", error);
