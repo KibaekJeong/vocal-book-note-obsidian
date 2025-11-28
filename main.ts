@@ -567,7 +567,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
         type: "property",
         property: "type",
         operator: "equals",
-        value: "book",
+        value: "Book",
       },
       views: [
         {

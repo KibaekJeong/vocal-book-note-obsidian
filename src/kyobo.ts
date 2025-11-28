@@ -791,12 +791,13 @@ function extractMetaFromDetailPage(html: string, pageUrl: string): BookMeta | nu
       if (jsonLdMeta.publisher) meta.publisher = jsonLdMeta.publisher;
       if (jsonLdMeta.publishedDate) meta.publishedDate = jsonLdMeta.publishedDate;
       if (jsonLdMeta.isbn) meta.isbn = jsonLdMeta.isbn;
+      if (jsonLdMeta.coverImage) meta.coverImage = jsonLdMeta.coverImage;
+      if (jsonLdMeta.description) meta.description = jsonLdMeta.description;
+      if (jsonLdMeta.genre) meta.genre = jsonLdMeta.genre;
+      if (jsonLdMeta.topics) meta.topics = jsonLdMeta.topics;
+      if (jsonLdMeta.rating) meta.rating = jsonLdMeta.rating;
       
-      // If we got a good title from JSON-LD, we're done
-      if (meta.title) {
-        console.log("[Book Voice Capture] Extracted metadata from JSON-LD:", meta);
-        return meta;
-      }
+      console.log("[Book Voice Capture] Merged metadata from JSON-LD:", meta);
     }
     
     // Strategy 2: Try microdata (itemprop attributes)
@@ -808,14 +809,17 @@ function extractMetaFromDetailPage(html: string, pageUrl: string): BookMeta | nu
       if (!meta.publisher && microdataMeta.publisher) meta.publisher = microdataMeta.publisher;
       if (!meta.publishedDate && microdataMeta.publishedDate) meta.publishedDate = microdataMeta.publishedDate;
       if (!meta.isbn && microdataMeta.isbn) meta.isbn = microdataMeta.isbn;
+      if (!meta.coverImage && microdataMeta.coverImage) meta.coverImage = microdataMeta.coverImage;
+      if (!meta.description && microdataMeta.description) meta.description = microdataMeta.description;
+      if (!meta.genre && microdataMeta.genre) meta.genre = microdataMeta.genre;
+      if (!meta.topics && microdataMeta.topics) meta.topics = microdataMeta.topics;
+      if (!meta.rating && microdataMeta.rating) meta.rating = microdataMeta.rating;
       
-      if (meta.title) {
-        console.log("[Book Voice Capture] Extracted metadata from microdata:", meta);
-        return meta;
-      }
+      console.log("[Book Voice Capture] Merged metadata from microdata:", meta);
     }
     
     // Strategy 3: Fallback to regex patterns (least reliable but catches edge cases)
+    // This is crucial for fields like coverImage/description which might be better in og: tags
     extractMetaFromRegex(html, meta);
 
     if (!meta.title) {
@@ -1132,6 +1136,7 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
   if (!meta.coverImage) {
     const imagePatterns = [
       /<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i,
+      /<meta\s+content="([^"]+)"\s+(?:property|name)="og:image"/i,
       /<link\s+rel="image_src"\s+href="([^"]+)"/i,
       /class="[^"]*(?:cover|prod_img|portrait)[^"]*"[^>]*src="([^"]+)"/i,
       /<img[^>]*id="mainImage"[^>]*src="([^"]+)"/i,
@@ -1150,8 +1155,10 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
   // Description extraction
   if (!meta.description) {
     const descriptionPatterns = [
-      /<meta\s+(?:name|property)="description"\s+content="([^"]+)"/i,
       /<meta\s+property="og:description"\s+content="([^"]+)"/i,
+      /<meta\s+content="([^"]+)"\s+property="og:description"/i,
+      /<meta\s+(?:name|property)="description"\s+content="([^"]+)"/i,
+      /<meta\s+content="([^"]+)"\s+(?:name|property)="description"/i,
       /class="[^"]*(?:prod_detail_text|book_intro)[^"]*"[^>]*>([\s\S]{50,500})<\/div>/i,
     ];
     for (const pattern of descriptionPatterns) {
@@ -1178,9 +1185,16 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
   }
 
   if (!meta.topics) {
-    const keywordsMatch = html.match(/<meta\s+name="keywords"\s+content="([^"]+)"/i);
-    if (keywordsMatch && keywordsMatch[1]) {
-      meta.topics = cleanText(keywordsMatch[1]);
+    const keywordsPatterns = [
+      /<meta\s+name="keywords"\s+content="([^"]+)"/i,
+      /<meta\s+content="([^"]+)"\s+name="keywords"/i,
+    ];
+    for (const pattern of keywordsPatterns) {
+      const keywordsMatch = html.match(pattern);
+      if (keywordsMatch && keywordsMatch[1]) {
+        meta.topics = cleanText(keywordsMatch[1]);
+        break;
+      }
     }
   }
 
@@ -1194,6 +1208,8 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
   // Rating extraction
   if (!meta.rating) {
     const ratingPatterns = [
+      /<meta\s+(?:property|name)="books:rating:value"\s+content="([^"]+)"/i,
+      /<meta\s+content="([^"]+)"\s+(?:property|name)="books:rating:value"/i,
       /itemprop="ratingValue"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
       /class="[^"]*(?:rating|score)[^"]*"[^>]*>([\d\.]+)</i,
     ];
