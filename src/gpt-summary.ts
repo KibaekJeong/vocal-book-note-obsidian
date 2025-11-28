@@ -4,7 +4,7 @@ import { BookMeta } from "./kyobo";
 /**
  * GPT Summary section marker for idempotency checks
  */
-export const GPT_SUMMARY_SECTION = "## GPT Summary";
+export const GPT_SUMMARY_SECTION = "## 🧭 Overview";
 
 /**
  * Result from GPT summary generation
@@ -22,9 +22,9 @@ function buildGptPrompt(meta: BookMeta): string {
   const normalizedLanguage = (meta.language || "").toLowerCase();
   const isKorean = normalizedLanguage === "ko" || /[가-힣]/.test(meta.title || "");
   const languageName = isKorean ? "Korean" : "English";
-  const summaryHeader = isKorean ? "요약" : "Summary";
-  const keyPointsHeader = isKorean ? "핵심 포인트" : "Key Points";
-  const quotesHeader = isKorean ? "인용문" : "Quotes";
+  const summaryHeader = isKorean ? "🧭 요약" : "🧭 Overview";
+  const keyPointsHeader = isKorean ? "🧩 핵심 포인트" : "🧩 Key Ideas";
+  const quotesHeader = isKorean ? "💡 Quotes" : "💡 Quotes";
   
   const metaLines: string[] = [];
   
@@ -44,21 +44,20 @@ ${metaBlock}
 
 Please provide:
 
-1. **SUMMARY** (6-10 sentences):
+1. **OVERVIEW** (6-10 sentences):
    - Capture the book's main premise, central themes, and narrative arc
+   - Start with "**What this book is about:**" in bold, then the content on a new line in a blockquote
    - Be informative and substantive, not vague
-   - Write in a flowing paragraph style
 
-2. **KEY POINTS** (8-15 bullet points):
-   - Cover major arguments, frameworks, concepts, and takeaways
-   - Make each point informative enough that someone could recall the book's content
-   - Be specific rather than generic
+2. **KEY IDEAS** (8-15 bullet points):
+   - Cover major frameworks, insights, or mental models
+   - Start with a blockquote line: "> Core frameworks, insights, or mental models that stand out."
+   - Followed by bullet points
 
-3. **REPRESENTATIVE QUOTES** (8-15 quotes):
-   - Include well-known, impactful, or representative quotes from the book
-   - If you know the page number, include it in parentheses
-   - If page number is unknown, write "(page unknown)"
-   - Format each quote on its own line with proper quotation marks
+3. **QUOTES** (8-15 quotes):
+   - Include well-known, impactful, or representative quotes
+   - Start with a blockquote line: "> Popular quotes from the book."
+   - Followed by bullet points containing the quotes
 
 IMPORTANT:
 - Be concise but substantive (no fluff or filler phrases)
@@ -68,18 +67,33 @@ IMPORTANT:
 
 Format your response EXACTLY as follows (use these exact headers):
 
-### ${summaryHeader}
-[Your 6-10 sentence summary paragraph here]
+## ${summaryHeader}
 
-### ${keyPointsHeader}
-- [Point 1]
-- [Point 2]
-...
+> **What this book is about:**  
+> [Your summary paragraph here]
 
-### ${quotesHeader}
-> "[Quote 1]" (page X or page unknown)
-> "[Quote 2]" (page X or page unknown)
-...`;
+---
+
+## ${keyPointsHeader}
+
+> Core frameworks, insights, or mental models that stand out.
+
+- [Idea 1]
+- [Idea 2]
+- [Idea 3]
+
+---
+
+## ${quotesHeader}
+
+> Popular quotes from the book.
+
+- "[Quote 1]"
+- "[Quote 2]"
+
+## Voice Notes
+
+---`;
 }
 
 /**
@@ -185,10 +199,8 @@ export async function generateGptSummary(
  * Format the GPT summary response into a markdown section
  */
 export function formatGptSummarySection(gptResponse: string): string {
-  // The response should already be formatted with ### headers
-  // Just wrap it in the main section header
-  
-  let section = `${GPT_SUMMARY_SECTION}\n\n`;
+  // The response should already be formatted with ## headers
+  // Just return it directly as the section
   
   // Clean up the response - ensure proper spacing
   const cleanedResponse = gptResponse
@@ -196,10 +208,7 @@ export function formatGptSummarySection(gptResponse: string): string {
     .replace(/\n{3,}/g, "\n\n")    // Remove excessive blank lines
     .trim();
   
-  section += cleanedResponse;
-  section += "\n\n";
-  
-  return section;
+  return cleanedResponse + "\n\n";
 }
 
 /**
@@ -211,10 +220,28 @@ export function formatGptSummaryUnavailable(reason: string): string {
   
   return `${GPT_SUMMARY_SECTION}
 
-> ⚠️ **GPT summary unavailable** (${timestamp})
-> ${reason}
-> 
-> You can regenerate this summary later by editing this section and using the plugin.
+> **What this book is about:**  
+> ⚠️ **GPT summary unavailable** (${timestamp}) - ${reason}
+
+---
+
+## 🧩 Key Ideas
+
+> Core frameworks, insights, or mental models that stand out.
+
+- (Summary unavailable)
+
+---
+
+## 💡 Quotes
+
+> Popular quotes from the book.
+
+- (Quotes unavailable)
+
+## Voice Notes
+
+---
 
 `;
 }
