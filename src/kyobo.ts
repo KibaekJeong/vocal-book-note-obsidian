@@ -1044,8 +1044,10 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
       /저자[:\s]*<[^>]*>([^<]+)</i,
       /<meta\s+name="author"\s+content="([^"]+)"/i,
       /class="[^"]*author[^"]*"[^>]*>([^<]+)</i,
+      /class="[^"]*prod_author[^"]*"[^>]*>([^<]+)</i,
       /지은이[:\s]*<[^>]*>([^<]+)</i,
       /"author"[:\s]*"([^"]+)"/i,
+      /<div[^>]*class="[^"]*author_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
     ];
 
     for (const pattern of authorPatterns) {
@@ -1062,8 +1064,10 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
     const publisherPatterns = [
       /출판사[:\s]*<[^>]*>([^<]+)</i,
       /class="[^"]*publisher[^"]*"[^>]*>([^<]+)</i,
+      /class="[^"]*prod_publish[^"]*"[^>]*>([^<]+)</i,
       /"publisher"[:\s]*"([^"]+)"/i,
       /발행처[:\s]*<[^>]*>([^<]+)</i,
+      /<div[^>]*class="[^"]*publish_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
     ];
 
     for (const pattern of publisherPatterns) {
@@ -1080,6 +1084,8 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
     const datePatterns = [
       /출간일[:\s]*<[^>]*>([^<]+)</i,
       /발행일[:\s]*<[^>]*>([^<]+)</i,
+      /class="[^"]*date[^"]*"[^>]*>([^<]+)</i,
+      /class="[^"]*prod_date[^"]*"[^>]*>([^<]+)</i,
       /(\d{4})[.\-년]\s*(\d{1,2})[.\-월]\s*(\d{1,2})일?/,
       /"datePublished"[:\s]*"([^"]+)"/i,
     ];
@@ -1090,7 +1096,14 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
         if (match[2] && match[3]) {
           meta.publishedDate = `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
         } else if (match[1]) {
-          meta.publishedDate = cleanText(match[1]);
+          const dateStr = cleanText(match[1]);
+          // Try to parse YYYY.MM.DD or YYYY년 MM월 DD일 format
+          const parsed = dateStr.match(/(\d{4})[.\-년]\s*(\d{1,2})[.\-월]\s*(\d{1,2})일?/);
+          if (parsed) {
+             meta.publishedDate = `${parsed[1]}-${parsed[2].padStart(2, "0")}-${parsed[3].padStart(2, "0")}`;
+          } else {
+             meta.publishedDate = dateStr;
+          }
         }
         break;
       }
@@ -1119,7 +1132,11 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
   if (!meta.coverImage) {
     const imagePatterns = [
       /<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i,
-      /class="[^"]*(?:cover|prod_img)[^"]*"[^>]*src="([^"]+)"/i,
+      /<link\s+rel="image_src"\s+href="([^"]+)"/i,
+      /class="[^"]*(?:cover|prod_img|portrait)[^"]*"[^>]*src="([^"]+)"/i,
+      /<img[^>]*id="mainImage"[^>]*src="([^"]+)"/i,
+      /<div[^>]*class="[^"]*thumb_box[^"]*"[^>]*>[\s\S]*?<img[^>]*src="([^"]+)"/i,
+      /<div[^>]*class="[^"]*cover_box[^"]*"[^>]*>[\s\S]*?<img[^>]*src="([^"]+)"/i,
     ];
     for (const pattern of imagePatterns) {
       const match = html.match(pattern);
