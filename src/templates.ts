@@ -28,6 +28,9 @@ export function renderBookNoteTemplate(template: string, meta: BookMeta): string
   // Aliases that match Obsidian clipper placeholders
   replacements["meta:property:eg:category2_name"] = meta.genre || "";
   replacements["schema:@Book:description"] = meta.description || "";
+  replacements["schema:@Book:workExample[0].datePublished"] = meta.publishedDate || "";
+  replacements["schema:@Book:aggregateRating.ratingValue"] = meta.rating || "";
+  replacements["schema:@Book:keywords"] = meta.topics || "";
 
   let rendered = template.replace(/\{\{([^}]+)\}\}/g, (_, rawKey: string) => {
     const key = rawKey.trim();

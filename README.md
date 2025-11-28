@@ -134,16 +134,15 @@ Type: Book
 Area: ""
 Goal: ""
 Status: "reading"
-type: book
-language: "{{language}}"
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
+publishedDate: "{{schema:@Book:workExample[0].datePublished}}"
 Cover: "{{image}}"
 url: "{{kyoboUrl}}"
-Topics: "{{topics}}"
+Topics: "{{schema:@Book:keywords}}"
 Genre: "{{meta:property:eg:category2_name}}"
-Rating: "{{rating}}"
+Rating: "{{schema:@Book:aggregateRating.ratingValue}}"
 'start reading': "{{currentDate}}"
 'end reading': ""
 Description: "{{schema:@Book:description}}"
@@ -185,12 +184,12 @@ Description: "{{schema:@Book:description}}"
 - `{{title}}` - Book title
 - `{{author}}` - Author name
 - `{{publisher}}` - Publisher name
-- `{{language}}` - ISO language code inferred from metadata (`ko` or `en`)
+- `{{schema:@Book:workExample[0].datePublished}}` - Publication date (Kyobo structured data)
 - `{{kyoboUrl}}` - Kyobo book page URL
 - `{{coverImage}}` / `{{image}}` - Cover image URL
-- `{{topics}}` - Topics or keywords parsed from Kyobo
+- `{{schema:@Book:keywords}}` / `{{topics}}` - Topics or keywords parsed from Kyobo
 - `{{genre}}` or `{{meta:property:eg:category2_name}}` - Genre/category information
-- `{{rating}}` - Kyobo rating (if available)
+- `{{schema:@Book:aggregateRating.ratingValue}}` / `{{rating}}` - Kyobo rating
 - `{{description}}` or `{{schema:@Book:description}}` - Kyobo description/summary
 - `type: book` is automatically added even if you omit it
 - `{{currentDate}}` - Today's date (YYYY-MM-DD)
