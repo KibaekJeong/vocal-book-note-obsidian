@@ -843,7 +843,7 @@ function extractMetaFromJsonLd(html: string): Partial<BookMeta> | null {
   while ((match = jsonLdPattern.exec(html)) !== null) {
     try {
       const jsonData = JSON.parse(match[1]);
-      const items = Array.isArray(jsonData) ? jsonData : [jsonData];
+      const items = collectJsonLdItems(jsonData);
       
       for (const item of items) {
         const itemType = getJsonLdValue(item, "@type");
@@ -1167,6 +1167,13 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
     }
   }
 
+  if (!meta.genre) {
+    const categoryMeta = html.match(/<meta\s+(?:property|name)="eg:category2_name"\s+content="([^"]+)"/i);
+    if (categoryMeta && categoryMeta[1]) {
+      meta.genre = cleanText(categoryMeta[1]);
+    }
+  }
+
   // Rating extraction
   if (!meta.rating) {
     const ratingPatterns = [
@@ -1277,6 +1284,29 @@ function extractWorkExampleDate(workExample: unknown): string {
   }
 
   return "";
+}
+
+function collectJsonLdItems(data: unknown): Record<string, unknown>[] {
+  const items: Record<string, unknown>[] = [];
+  const stack: unknown[] = Array.isArray(data) ? [...data] : [data];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const obj = current as Record<string, unknown>;
+
+    if (Array.isArray(obj["@graph"])) {
+      for (const entry of obj["@graph"] as unknown[]) {
+        stack.push(entry);
+      }
+    }
+
+    items.push(obj);
+  }
+
+  return items;
 }
 
 function extractFirstString(value: unknown): string {

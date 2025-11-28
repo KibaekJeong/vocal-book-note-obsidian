@@ -571,36 +571,19 @@ export default class BookVoiceCapturePlugin extends Plugin {
       },
       views: [
         {
-          id: "books-grid",
-          type: "gallery",
+          id: "book-covers",
+          type: "table",
           name: "Book Covers",
-          card: {
-            imageProperty: "Cover",
-            titleProperty: "title",
-            subtitleProperty: "author",
-            descriptionProperty: "publisher",
-          },
+          columns: [
+            { property: "Cover", label: "Cover", width: 220 },
+            { property: "title", label: "Title", width: 260 },
+            { property: "author", label: "Author", width: 200 },
+          ],
           filter: {
             type: "property",
             property: "Cover",
             operator: "is not empty",
           },
-          sort: [
-            { property: "title", direction: "asc" },
-          ],
-        },
-        {
-          id: "books-table",
-          type: "table",
-          name: "Books",
-          columns: [
-            { property: "title", label: "Title", width: 260 },
-            { property: "author", label: "Author", width: 200 },
-            { property: "publisher", label: "Publisher", width: 200 },
-            { property: "status", label: "Status", width: 120 },
-            { property: "language", label: "Language", width: 100 },
-            { property: "rating", label: "Rating", width: 80 },
-          ],
           sort: [
             { property: "title", direction: "asc" },
           ],
