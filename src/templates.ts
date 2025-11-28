@@ -6,13 +6,28 @@ import { getCurrentDateFormatted } from "./util";
  * Render the book note template with book metadata
  */
 export function renderBookNoteTemplate(template: string, meta: BookMeta): string {
-  return template
-    .replace(/\{\{title\}\}/g, meta.title || "")
-    .replace(/\{\{author\}\}/g, meta.author || "")
-    .replace(/\{\{publisher\}\}/g, meta.publisher || "")
-    .replace(/\{\{publishedDate\}\}/g, meta.publishedDate || "")
-    .replace(/\{\{isbn\}\}/g, meta.isbn || "")
-    .replace(/\{\{kyoboUrl\}\}/g, meta.kyoboUrl || "");
+  const today = getCurrentDateFormatted();
+  const replacements: Record<string, string> = {
+    title: meta.title || "",
+    author: meta.author || "",
+    publisher: meta.publisher || "",
+    publishedDate: meta.publishedDate || "",
+    isbn: meta.isbn || "",
+    kyoboUrl: meta.kyoboUrl || "",
+    coverImage: meta.coverImage || "",
+    image: meta.coverImage || "",
+    description: meta.description || "",
+    genre: meta.genre || "",
+    topics: meta.topics || "",
+    rating: meta.rating || "",
+    date: today,
+    currentDate: today,
+  };
+
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+    const value = replacements[key];
+    return value !== undefined ? value : "";
+  });
 }
 
 /**

@@ -1,10 +1,22 @@
-import { App, PluginSettingTab, Setting, TextComponent, TextAreaComponent, ToggleComponent, ButtonComponent } from "obsidian";
+import {
+  App,
+  PluginSettingTab,
+  Setting,
+  TextComponent,
+  TextAreaComponent,
+  ToggleComponent,
+  ButtonComponent,
+  normalizePath,
+} from "obsidian";
 import type BookVoiceCapturePlugin from "../main";
 
 export interface BookVoiceCaptureSettings {
   openAIApiKey: string;
   openAIWhisperModel: string;
   booksFolder: string;
+  baseFolder: string;
+  baseFilePath: string;
+  dataFolder: string;
   bookNoteTemplate: string;
   highlightBlockTemplate: string;
   kyoboEnabled: boolean;
@@ -19,6 +31,9 @@ export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
   openAIApiKey: "",
   openAIWhisperModel: "whisper-1",
   booksFolder: "Books",
+  baseFolder: "Books",
+  baseFilePath: "Base/Books.base",
+  dataFolder: "Books",
   kyoboEnabled: true,
   // GPT Summary defaults
   enableGptSummary: false,
@@ -26,15 +41,24 @@ export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
   gptMaxTokens: 2500,
   gptTemperature: 0.7,
   bookNoteTemplate: `---
-type: book
+Type: Book
+Area: ""
+Goal: ""
+Status: "reading"
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
 publishedDate: "{{publishedDate}}"
 isbn: "{{isbn}}"
+cover: "{{coverImage}}"
+url: "{{kyoboUrl}}"
+Topics: "{{topics}}"
+Genre: "{{genre}}"
+Rating: "{{rating}}"
+'start reading': "{{currentDate}}"
+'end reading': ""
+Description: "{{description}}"
 source: "Kyobo"
-status: "reading"
-kyoboUrl: "{{kyoboUrl}}"
 ---
 
 # {{title}}
@@ -115,16 +139,50 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
           })
       );
 
-    // Books Folder
+    containerEl.createEl("h3", { text: "Base & Data Layout" });
+
     new Setting(containerEl)
-      .setName("Books Folder")
-      .setDesc("The folder where book notes will be created.")
+      .setName("Base Folder")
+      .setDesc("Root folder that contains your Base file and book data (e.g., Snipd, Books).")
       .addText((text: TextComponent) =>
         text
-          .setPlaceholder("Books")
-          .setValue(this.plugin.settings.booksFolder)
+          .setPlaceholder(this.plugin.settings.baseFolder || "Books")
+          .setValue(this.plugin.settings.baseFolder)
           .onChange(async (value: string) => {
-            this.plugin.settings.booksFolder = value || "Books";
+            const normalized = value?.trim() ? normalizePath(value.trim()) : "Books";
+            this.plugin.settings.baseFolder = normalized;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Base File Path")
+      .setDesc("Relative path under the base folder for your Obsidian Base file (e.g., Base/Books.base).")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder(this.plugin.settings.baseFilePath || "Base/Books.base")
+          .setValue(this.plugin.settings.baseFilePath)
+          .onChange(async (value: string) => {
+            const normalized = value?.trim() ? normalizePath(value.trim()) : "Base/Books.base";
+            this.plugin.settings.baseFilePath = normalized;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Book Pages Folder")
+      .setDesc("Folder where individual book notes will be stored. Leave empty to reuse the base folder.")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder(this.plugin.settings.dataFolder || "Books")
+          .setValue(this.plugin.settings.dataFolder || this.plugin.settings.booksFolder)
+          .onChange(async (value: string) => {
+            const fallback = this.plugin.settings.baseFolder || "Books";
+            const normalized = value?.trim()
+              ? normalizePath(value.trim())
+              : fallback;
+            this.plugin.settings.dataFolder = normalized;
+            this.plugin.settings.booksFolder = normalized;
             await this.plugin.saveSettings();
           })
       );
@@ -204,7 +262,7 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Book Note Template")
       .setDesc(
-        "Template for new book notes. Available placeholders: {{title}}, {{author}}, {{publisher}}, {{publishedDate}}, {{isbn}}, {{kyoboUrl}}"
+        "Template for new book notes. Available placeholders: {{title}}, {{author}}, {{publisher}}, {{publishedDate}}, {{isbn}}, {{kyoboUrl}}, {{coverImage}}, {{image}}, {{topics}}, {{genre}}, {{rating}}, {{description}}, {{currentDate}}"
       )
       .addTextArea((text: TextAreaComponent) => {
         text

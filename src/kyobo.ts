@@ -7,6 +7,11 @@ export interface BookMeta {
   publishedDate?: string;
   isbn?: string;
   kyoboUrl?: string;
+  coverImage?: string;
+  description?: string;
+  genre?: string;
+  topics?: string;
+  rating?: string;
 }
 
 /**
@@ -871,6 +876,34 @@ function extractMetaFromJsonLd(html: string): Partial<BookMeta> | null {
         if (item.isbn && !meta.isbn) {
           meta.isbn = String(item.isbn);
         }
+
+        // Cover image
+        if (item.image && !meta.coverImage) {
+          meta.coverImage = extractFirstString(item.image);
+        }
+
+        // Description
+        if (item.description && !meta.description) {
+          meta.description = cleanText(String(item.description));
+        }
+
+        // Genre
+        if (item.genre && !meta.genre) {
+          meta.genre = extractListValue(item.genre);
+        }
+
+        // Topics/keywords
+        if (!meta.topics && (item.about || item.keywords)) {
+          meta.topics = extractListValue(item.about ?? item.keywords);
+        }
+
+        // Rating
+        if (!meta.rating && typeof item.aggregateRating === "object" && item.aggregateRating !== null) {
+          const aggregate = item.aggregateRating as Record<string, unknown>;
+          if (aggregate.ratingValue) {
+            meta.rating = String(aggregate.ratingValue);
+          }
+        }
         
         // If we have a title, we found a good item
         if (meta.title) {
@@ -919,6 +952,36 @@ function extractMetaFromMicrodata(html: string): Partial<BookMeta> | null {
   const isbnMatch = html.match(/itemprop="isbn"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
   if (isbnMatch) {
     meta.isbn = cleanText(isbnMatch[1] || isbnMatch[2] || "");
+  }
+
+  // Cover image
+  const imageMatch = html.match(/itemprop="image"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
+  if (imageMatch) {
+    meta.coverImage = imageMatch[1] || imageMatch[2] || "";
+  }
+
+  // Description
+  const descriptionMatch = html.match(/itemprop="description"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
+  if (descriptionMatch) {
+    meta.description = cleanText(descriptionMatch[1] || descriptionMatch[2] || "");
+  }
+
+  // Genre
+  const genreMatch = html.match(/itemprop="genre"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
+  if (genreMatch) {
+    meta.genre = cleanText(genreMatch[1] || genreMatch[2] || "");
+  }
+
+  // Rating
+  const ratingMatch = html.match(/itemprop="ratingValue"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
+  if (ratingMatch) {
+    meta.rating = cleanText(ratingMatch[1] || ratingMatch[2] || "");
+  }
+
+  // Keywords/topics
+  const keywordsMatch = html.match(/itemprop="keywords"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i);
+  if (keywordsMatch) {
+    meta.topics = cleanText(keywordsMatch[1] || keywordsMatch[2] || "");
   }
   
   return Object.keys(meta).length > 0 ? meta : null;
@@ -1022,6 +1085,73 @@ function extractMetaFromRegex(html: string, meta: BookMeta): void {
       }
     }
   }
+
+  // Cover image extraction
+  if (!meta.coverImage) {
+    const imagePatterns = [
+      /<meta\s+(?:property|name)="og:image"\s+content="([^"]+)"/i,
+      /class="[^"]*(?:cover|prod_img)[^"]*"[^>]*src="([^"]+)"/i,
+    ];
+    for (const pattern of imagePatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        meta.coverImage = match[1];
+        break;
+      }
+    }
+  }
+
+  // Description extraction
+  if (!meta.description) {
+    const descriptionPatterns = [
+      /<meta\s+(?:name|property)="description"\s+content="([^"]+)"/i,
+      /<meta\s+property="og:description"\s+content="([^"]+)"/i,
+      /class="[^"]*(?:prod_detail_text|book_intro)[^"]*"[^>]*>([\s\S]{50,500})<\/div>/i,
+    ];
+    for (const pattern of descriptionPatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        meta.description = cleanText(match[1]);
+        break;
+      }
+    }
+  }
+
+  // Genre/topics extraction
+  if (!meta.genre || !meta.topics) {
+    const categoryMatch = html.match(/class="[^"]*prod_category[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span)>/i);
+    if (categoryMatch && categoryMatch[1]) {
+      const cleaned = cleanText(categoryMatch[1]);
+      if (!meta.genre) {
+        meta.genre = cleaned;
+      }
+      if (!meta.topics) {
+        meta.topics = cleaned;
+      }
+    }
+  }
+
+  if (!meta.topics) {
+    const keywordsMatch = html.match(/<meta\s+name="keywords"\s+content="([^"]+)"/i);
+    if (keywordsMatch && keywordsMatch[1]) {
+      meta.topics = cleanText(keywordsMatch[1]);
+    }
+  }
+
+  // Rating extraction
+  if (!meta.rating) {
+    const ratingPatterns = [
+      /itemprop="ratingValue"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
+      /class="[^"]*(?:rating|score)[^"]*"[^>]*>([\d\.]+)</i,
+    ];
+    for (const pattern of ratingPatterns) {
+      const match = html.match(pattern);
+      if (match) {
+        meta.rating = cleanText(match[1] || match[2] || "");
+        break;
+      }
+    }
+  }
 }
 
 /**
@@ -1071,4 +1201,45 @@ function cleanText(text: string): string {
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function extractFirstString(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const first = value.find(Boolean);
+    return first ? extractFirstString(first) : "";
+  }
+  if (typeof value === "object" && value !== null) {
+    const obj = value as Record<string, unknown>;
+    if (obj.url) return String(obj.url);
+    if (obj.name) return cleanText(String(obj.name));
+  }
+  return "";
+}
+
+function extractListValue(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") {
+    return value
+      .split(/[,|]/)
+      .map(v => cleanText(v))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map(v => extractListValue(v))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "object" && value !== null) {
+    const obj = value as Record<string, unknown>;
+    if (obj.name) {
+      return cleanText(String(obj.name));
+    }
+  }
+  return "";
 }

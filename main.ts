@@ -337,11 +337,48 @@ export default class BookVoiceCapturePlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const stored = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+    if (!this.settings.baseFolder) {
+      this.settings.baseFolder = DEFAULT_SETTINGS.baseFolder;
+    }
+    if (!this.settings.baseFilePath) {
+      this.settings.baseFilePath = DEFAULT_SETTINGS.baseFilePath;
+    }
+    if (!this.settings.dataFolder) {
+      this.settings.dataFolder = this.settings.booksFolder || DEFAULT_SETTINGS.booksFolder;
+    }
+    if (!this.settings.booksFolder) {
+      this.settings.booksFolder = this.settings.dataFolder || DEFAULT_SETTINGS.booksFolder;
+    }
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * Resolve the folder path where book notes should be stored.
+   * Prefers the dedicated data folder, then the legacy books folder,
+   * and finally derives a Data subfolder from the base folder.
+   */
+  private getBookPagesFolder(): string {
+    const dataFolder = this.settings.dataFolder?.trim();
+    if (dataFolder) {
+      return dataFolder;
+    }
+
+    const legacyBooksFolder = this.settings.booksFolder?.trim();
+    if (legacyBooksFolder) {
+      return legacyBooksFolder;
+    }
+
+    const baseFolder = this.settings.baseFolder?.trim();
+    if (baseFolder) {
+      return `${baseFolder}/Data`;
+    }
+
+    return DEFAULT_SETTINGS.booksFolder;
   }
 
   /**
@@ -356,7 +393,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
   private getBookNotes(): BookNoteItem[] {
     const bookNotes: BookNoteItem[] = [];
     const uncachedFiles: TFile[] = [];
-    const booksFolder = this.app.vault.getAbstractFileByPath(this.settings.booksFolder);
+    const bookFolderPath = this.getBookPagesFolder();
+    const booksFolder = this.app.vault.getAbstractFileByPath(bookFolderPath);
 
     if (!booksFolder || !(booksFolder instanceof TFolder)) {
       return bookNotes;
@@ -632,7 +670,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
    * This is the unified flow for the Kyobo search command.
    */
   private async createBookNoteAndStartRecording(meta: BookMeta): Promise<void> {
-    const notePath = getBookNotePath(this.settings.booksFolder, meta.title);
+    const notePath = getBookNotePath(this.getBookPagesFolder(), meta.title);
     const existingFile = this.app.vault.getAbstractFileByPath(notePath);
 
     if (existingFile instanceof TFile) {
@@ -693,13 +731,13 @@ export default class BookVoiceCapturePlugin extends Plugin {
   private async createBookNoteInsertPlaceholderAndRecord(meta: BookMeta): Promise<void> {
     try {
       // Ensure the books folder exists
-      await ensureFolderExists(this.app, this.settings.booksFolder);
+      await ensureFolderExists(this.app, this.getBookPagesFolder());
 
       // Render the template (without GPT - we'll add it async)
       const content = renderBookNoteTemplate(this.settings.bookNoteTemplate, meta);
 
       // Create the file immediately (don't wait for GPT)
-      const notePath = getBookNotePath(this.settings.booksFolder, meta.title);
+      const notePath = getBookNotePath(this.getBookPagesFolder(), meta.title);
       const newFile = await this.app.vault.create(notePath, content);
 
       // Start GPT generation in background if enabled (non-blocking)

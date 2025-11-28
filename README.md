@@ -48,7 +48,9 @@ Open Settings → Book Voice Capture to configure:
 |---------|-------------|---------|
 | OpenAI API Key | Your OpenAI API key for Whisper transcription | (required) |
 | Whisper Model | The OpenAI Whisper model to use | `whisper-1` |
-| Books Folder | Folder where book notes will be created | `Books` |
+| Base Folder | Root folder that contains your Base file and book data | `Books` |
+| Base File Path | Relative path (under the base folder) to your `.base` file | `Base/Books.base` |
+| Book Pages Folder | Folder where book notes will be created | `Books` |
 | Enable Kyobo Scraping | Fetch metadata from Kyobo when creating book notes | `true` |
 | Book Note Template | Template for new book notes | See below |
 | Highlight Block Template | Template for voice highlights | See below |
@@ -79,7 +81,7 @@ Open Settings → Book Voice Capture to configure:
 4. The plugin will:
    - Search Kyobo for the book
    - Scrape metadata (title, author, publisher, etc.)
-   - Create a new note in your Books folder
+  - Create a new note in your configured Book Pages folder
    - Open the note
 
 ### Adding Voice Notes to Existing Books
@@ -128,15 +130,24 @@ The plugin supports various speech patterns:
 
 ```markdown
 ---
-type: book
+Type: Book
+Area: ""
+Goal: ""
+Status: "reading"
 title: "{{title}}"
 author: "{{author}}"
 publisher: "{{publisher}}"
 published: "{{publishedDate}}"
 isbn: "{{isbn}}"
+cover: "{{coverImage}}"
+url: "{{kyoboUrl}}"
+Topics: "{{topics}}"
+Genre: "{{genre}}"
+Rating: "{{rating}}"
+'start reading': "{{currentDate}}"
+'end reading': ""
+Description: "{{description}}"
 source: "Kyobo"
-status: "reading"
-kyoboUrl: "{{kyoboUrl}}"
 ---
 
 # {{title}}
@@ -178,6 +189,12 @@ kyoboUrl: "{{kyoboUrl}}"
 - `{{publishedDate}}` - Publication date
 - `{{isbn}}` - ISBN number
 - `{{kyoboUrl}}` - Kyobo book page URL
+- `{{coverImage}}` / `{{image}}` - Cover image URL
+- `{{topics}}` - Topics or keywords parsed from Kyobo
+- `{{genre}}` - Genre/category information
+- `{{rating}}` - Kyobo rating (if available)
+- `{{description}}` - Kyobo description/summary
+- `{{currentDate}}` - Today's date (YYYY-MM-DD)
 
 **Highlight Block Template:**
 - `{{page}}` - Page number
