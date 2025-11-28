@@ -226,6 +226,16 @@ export default class BookVoiceCapturePlugin extends Plugin {
     // Add settings tab
     this.addSettingTab(new BookVoiceCaptureSettingTab(this.app, this));
 
+    // Add ribbon icon for main command
+    this.addRibbonIcon("book-open", "Book Voice Capture", () => {
+      this.showActionModal();
+    });
+
+    // Add ribbon icon for quick voice recording to existing book
+    this.addRibbonIcon("mic", "Add Voice Note to Book", () => {
+      this.addVoiceNoteToExistingBook();
+    });
+
     // Command: Book Capture (main entry point with action choice)
     this.addCommand({
       id: "book-voice-capture-main",
