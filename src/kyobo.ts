@@ -38,6 +38,7 @@ export async function fetchKyoboSearchCandidates(query: string): Promise<KyoboSe
     const searchUrl = `https://search.kyobobook.co.kr/search?keyword=${encodeURIComponent(query)}&gbCode=TOT&target=total`;
     
     console.log(`[Book Voice Capture] Searching Kyobo for candidates: ${query}`);
+    console.log(`[Book Voice Capture] Search URL: ${searchUrl}`);
     
     const searchResponse: RequestUrlResponse = await requestUrl({
       url: searchUrl,
@@ -55,20 +56,36 @@ export async function fetchKyoboSearchCandidates(query: string): Promise<KyoboSe
     }
 
     const html = searchResponse.text;
+    console.log(`[Book Voice Capture] Search response length: ${html.length} chars`);
+    
     const seenUrls = new Set<string>();
     
     // Strategy 1: Parse JSON-LD structured data (most reliable when present)
     const jsonLdCandidates = parseJsonLdBooks(html, seenUrls);
+    console.log(`[Book Voice Capture] JSON-LD candidates: ${jsonLdCandidates.length}`);
     candidates.push(...jsonLdCandidates);
     
     // Strategy 2: Parse product list items with surrounding context
     const listCandidates = parseProductListItems(html, seenUrls);
+    console.log(`[Book Voice Capture] Product list candidates: ${listCandidates.length}`);
     candidates.push(...listCandidates);
     
     // Strategy 3: Fallback - extract from detail URLs with enrichment
     if (candidates.length === 0) {
+      console.log(`[Book Voice Capture] Using fallback URL extraction...`);
       const fallbackCandidates = parseDetailUrlsWithContext(html, seenUrls);
+      console.log(`[Book Voice Capture] Fallback candidates: ${fallbackCandidates.length}`);
       candidates.push(...fallbackCandidates);
+    }
+    
+    // If still no candidates, log sample of HTML for debugging
+    if (candidates.length === 0) {
+      console.log(`[Book Voice Capture] No candidates found. Sample HTML (first 2000 chars):`);
+      console.log(html.substring(0, 2000));
+      
+      // Check for common detail URL patterns
+      const detailUrlCount = (html.match(/product\.kyobobook\.co\.kr\/detail/g) || []).length;
+      console.log(`[Book Voice Capture] Detail URL occurrences in HTML: ${detailUrlCount}`);
     }
     
     // De-duplicate by URL and score by relevance to query
@@ -77,7 +94,11 @@ export async function fetchKyoboSearchCandidates(query: string): Promise<KyoboSe
     // Limit to 10 results
     const limitedCandidates = uniqueCandidates.slice(0, 10);
     
-    console.log(`[Book Voice Capture] Found ${limitedCandidates.length} candidates`);
+    console.log(`[Book Voice Capture] Final candidates: ${limitedCandidates.length}`);
+    for (const c of limitedCandidates) {
+      console.log(`[Book Voice Capture]   - ${c.title} | ${c.author} | ${c.publisher}`);
+    }
+    
     return limitedCandidates;
     
   } catch (error) {
@@ -92,6 +113,8 @@ export async function fetchKyoboSearchCandidates(query: string): Promise<KyoboSe
  */
 function parseJsonLdBooks(html: string, seenUrls: Set<string>): KyoboSearchCandidate[] {
   const candidates: KyoboSearchCandidate[] = [];
+  
+  // Strategy A: Parse JSON-LD script tags
   const jsonLdPattern = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi;
   
   let match;
@@ -121,7 +144,134 @@ function parseJsonLdBooks(html: string, seenUrls: Set<string>): KyoboSearchCandi
     }
   }
   
+  // Strategy B: Parse embedded __NEXT_DATA__ or similar (common in modern React apps)
+  const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (nextDataMatch) {
+    try {
+      const nextData = JSON.parse(nextDataMatch[1]);
+      const searchResults = extractSearchResultsFromNextData(nextData, seenUrls);
+      candidates.push(...searchResults);
+    } catch (error) {
+      console.log("[Book Voice Capture] Failed to parse __NEXT_DATA__:", error);
+    }
+  }
+  
+  // Strategy C: Look for inline JSON in script tags (common pattern)
+  const inlineJsonPatterns = [
+    /window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});?\s*<\/script>/i,
+    /window\.searchResult\s*=\s*({[\s\S]*?});?\s*<\/script>/i,
+    /"productList"\s*:\s*(\[[\s\S]*?\])/i,
+    /"items"\s*:\s*(\[[\s\S]*?\])/i,
+  ];
+  
+  for (const pattern of inlineJsonPatterns) {
+    const inlineMatch = html.match(pattern);
+    if (inlineMatch) {
+      try {
+        const jsonData = JSON.parse(inlineMatch[1]);
+        const items = Array.isArray(jsonData) ? jsonData : (jsonData.items || jsonData.productList || []);
+        for (const item of items) {
+          const candidate = extractCandidateFromEmbeddedJson(item, seenUrls);
+          if (candidate) candidates.push(candidate);
+        }
+      } catch {
+        // Parsing failed, continue
+      }
+    }
+  }
+  
   return candidates;
+}
+
+/**
+ * Extract search results from Next.js __NEXT_DATA__ structure
+ */
+function extractSearchResultsFromNextData(
+  data: Record<string, unknown>,
+  seenUrls: Set<string>
+): KyoboSearchCandidate[] {
+  const candidates: KyoboSearchCandidate[] = [];
+  
+  // Navigate common Next.js data structures
+  const props = data.props as Record<string, unknown> | undefined;
+  const pageProps = props?.pageProps as Record<string, unknown> | undefined;
+  
+  // Look for search results in various possible locations
+  const possibleArrays = [
+    pageProps?.searchResult,
+    pageProps?.products,
+    pageProps?.items,
+    pageProps?.books,
+    (pageProps?.data as Record<string, unknown>)?.items,
+    (pageProps?.data as Record<string, unknown>)?.products,
+  ];
+  
+  for (const arr of possibleArrays) {
+    if (Array.isArray(arr)) {
+      for (const item of arr) {
+        const candidate = extractCandidateFromEmbeddedJson(item as Record<string, unknown>, seenUrls);
+        if (candidate) candidates.push(candidate);
+      }
+    }
+  }
+  
+  return candidates;
+}
+
+/**
+ * Extract candidate from embedded JSON data (not JSON-LD, but inline JSON)
+ */
+function extractCandidateFromEmbeddedJson(
+  item: Record<string, unknown>,
+  seenUrls: Set<string>
+): KyoboSearchCandidate | null {
+  // Try various field names for URL
+  const url = String(
+    item.detailUrl || item.url || item.link || item.href ||
+    (item.cmdtCode ? `https://product.kyobobook.co.kr/detail/${item.cmdtCode}` : "") ||
+    (item.productId ? `https://product.kyobobook.co.kr/detail/${item.productId}` : "") ||
+    (item.saleCmdtId ? `https://product.kyobobook.co.kr/detail/${item.saleCmdtId}` : "") ||
+    ""
+  );
+  
+  if (!url || !url.includes("kyobobook") || seenUrls.has(url)) return null;
+  
+  // Try various field names for title
+  const title = cleanText(String(
+    item.cmdtName || item.title || item.name || item.productName || item.bookTitle || ""
+  ));
+  
+  if (!title || title.length < 2) return null;
+  
+  seenUrls.add(url);
+  
+  // Try various field names for author
+  const author = cleanText(String(
+    item.chrcName || item.author || item.authorName || item.writer || ""
+  ));
+  
+  // Try various field names for publisher
+  const publisher = cleanText(String(
+    item.pbcmName || item.publisher || item.publisherName || ""
+  ));
+  
+  // Try various field names for year
+  let year = "";
+  const dateStr = String(item.rlseDate || item.publishDate || item.pubDate || item.date || "");
+  const yearMatch = dateStr.match(/(\d{4})/);
+  if (yearMatch) year = yearMatch[1];
+  
+  // ISBN
+  const isbn = String(item.isbn || item.isbn13 || "");
+  
+  return {
+    title,
+    author,
+    publisher,
+    publishedYear: year,
+    detailUrl: url,
+    isbn,
+  };
 }
 
 /**
@@ -160,17 +310,31 @@ function extractCandidateFromJsonLd(
 function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearchCandidate[] {
   const candidates: KyoboSearchCandidate[] = [];
   
+  // Log what patterns we find for debugging
+  const prodAreaCount = (html.match(/prod_area/gi) || []).length;
+  const prodInfoCount = (html.match(/prod_info/gi) || []).length;
+  const itemListCount = (html.match(/item_list/gi) || []).length;
+  console.log(`[Book Voice Capture] HTML contains: prod_area=${prodAreaCount}, prod_info=${prodInfoCount}, item_list=${itemListCount}`);
+  
   // Pattern to find product item blocks (Kyobo uses various class patterns)
-  // Look for product containers that have title links and metadata
+  // Using more specific patterns based on common Kyobo structures
   const productBlockPatterns = [
-    // Pattern 1: prod_info container with nested elements
-    /<(?:div|li)[^>]*class="[^"]*(?:prod_info|product_item|search_result)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|li)>/gi,
-    // Pattern 2: List items with detail links
-    /<li[^>]*>([\s\S]*?href="(https?:\/\/product\.kyobobook\.co\.kr\/detail\/[^"]+)"[\s\S]*?)<\/li>/gi,
+    // Kyobo product area (large block containing book info)
+    /<div[^>]*class="[^"]*prod_area[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi,
+    // Product info container
+    /<div[^>]*class="[^"]*prod_info[^"]*"[^>]*>([\s\S]*?)(?:<\/div>\s*){2,}/gi,
+    // Item in list
+    /<li[^>]*class="[^"]*(?:item|result)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+    // Generic list items with detail links
+    /<li[^>]*>([\s\S]*?href="[^"]*product\.kyobobook\.co\.kr\/detail\/[^"]+"[\s\S]*?)<\/li>/gi,
+    // Card-style items
+    /<div[^>]*class="[^"]*(?:card|book_item|product_card)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
   ];
   
   for (const pattern of productBlockPatterns) {
     let match;
+    // Reset lastIndex for each pattern
+    pattern.lastIndex = 0;
     while ((match = pattern.exec(html)) !== null) {
       const block = match[1] || match[0];
       const candidate = extractCandidateFromBlock(block, seenUrls);
