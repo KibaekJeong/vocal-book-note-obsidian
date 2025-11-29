@@ -182,17 +182,23 @@ class KyoboCandidateModal extends FuzzySuggestModal<KyoboSearchCandidate> {
   }
 
   getItemText(item: KyoboSearchCandidate): string {
-    const parts: string[] = [item.title];
-    if (item.author) {
-      parts.push(`by ${item.author}`);
+    // Ensure we have a valid title to display
+    const title = item.title || "(Unknown Title)";
+    const parts: string[] = [title];
+    
+    if (item.author && item.author.length > 0) {
+      parts.push(`— ${item.author}`);
     }
-    if (item.publisher) {
+    if (item.publisher && item.publisher.length > 0) {
       parts.push(`(${item.publisher})`);
     }
-    if (item.publishedYear) {
+    if (item.publishedYear && item.publishedYear.length > 0) {
       parts.push(`[${item.publishedYear}]`);
     }
-    return parts.join(" ");
+    
+    const result = parts.join(" ");
+    console.log("[Book Voice Capture] Display text:", result);
+    return result;
   }
 
   onChooseItem(item: KyoboSearchCandidate, evt: MouseEvent | KeyboardEvent): void {
@@ -709,6 +715,17 @@ export default class BookVoiceCapturePlugin extends Plugin {
       console.log("[Book Voice Capture] Fetching Kyobo candidates for:", query);
       const candidates = await fetchKyoboSearchCandidates(query);
       console.log("[Book Voice Capture] Received candidates:", candidates.length);
+      
+      // Debug: log candidate details
+      for (const candidate of candidates) {
+        console.log("[Book Voice Capture] Candidate:", {
+          title: candidate.title,
+          author: candidate.author,
+          publisher: candidate.publisher,
+          year: candidate.publishedYear,
+          url: candidate.detailUrl,
+        });
+      }
 
       if (candidates.length === 0) {
         // No results - use query as title
