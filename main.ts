@@ -8,6 +8,7 @@ import {
   TFile,
   TFolder,
   FuzzySuggestModal,
+  SuggestModal,
   EventRef,
   normalizePath,
 } from "obsidian";
@@ -160,9 +161,9 @@ class BookSelectModal extends FuzzySuggestModal<BookNoteItem> {
 }
 
 /**
- * Modal for selecting a Kyobo search candidate
+ * Modal for selecting a Kyobo search candidate with thumbnail preview
  */
-class KyoboCandidateModal extends FuzzySuggestModal<KyoboSearchCandidate> {
+class KyoboCandidateModal extends SuggestModal<KyoboSearchCandidate> {
   private candidates: KyoboSearchCandidate[];
   private onChoose: (candidate: KyoboSearchCandidate) => void;
 
@@ -175,19 +176,102 @@ class KyoboCandidateModal extends FuzzySuggestModal<KyoboSearchCandidate> {
     this.candidates = candidates;
     this.onChoose = onChoose;
     this.setPlaceholder("Select a book from search results...");
+    
+    // Add custom CSS for thumbnails
+    this.modalEl.addClass("book-candidate-modal");
   }
 
-  getItems(): KyoboSearchCandidate[] {
-    return this.candidates;
+  getSuggestions(query: string): KyoboSearchCandidate[] {
+    const lowerQuery = query.toLowerCase();
+    if (!lowerQuery) {
+      return this.candidates;
+    }
+    return this.candidates.filter(candidate => {
+      const title = candidate.title?.toLowerCase() || "";
+      const author = candidate.author?.toLowerCase() || "";
+      return title.includes(lowerQuery) || author.includes(lowerQuery);
+    });
   }
 
-  getItemText(item: KyoboSearchCandidate): string {
-    const title = item.title?.trim() || "Unknown title";
-    const author = item.author?.trim();
-    return author ? `${title} - ${author}` : title;
+  renderSuggestion(item: KyoboSearchCandidate, el: HTMLElement): void {
+    const container = el.createDiv({ cls: "book-candidate-item" });
+    container.style.display = "flex";
+    container.style.alignItems = "center";
+    container.style.gap = "12px";
+    container.style.padding = "8px 4px";
+    
+    // Thumbnail
+    if (item.coverImage) {
+      const imgContainer = container.createDiv({ cls: "book-candidate-thumb" });
+      imgContainer.style.flexShrink = "0";
+      imgContainer.style.width = "40px";
+      imgContainer.style.height = "56px";
+      imgContainer.style.overflow = "hidden";
+      imgContainer.style.borderRadius = "4px";
+      imgContainer.style.backgroundColor = "var(--background-secondary)";
+      
+      const img = imgContainer.createEl("img", {
+        attr: {
+          src: item.coverImage,
+          alt: item.title,
+        },
+      });
+      img.style.width = "100%";
+      img.style.height = "100%";
+      img.style.objectFit = "cover";
+      
+      // Handle image load error
+      img.onerror = () => {
+        imgContainer.empty();
+        imgContainer.style.display = "flex";
+        imgContainer.style.alignItems = "center";
+        imgContainer.style.justifyContent = "center";
+        imgContainer.createSpan({ text: "📚" });
+      };
+    } else {
+      // Placeholder for no image
+      const placeholder = container.createDiv({ cls: "book-candidate-thumb-placeholder" });
+      placeholder.style.flexShrink = "0";
+      placeholder.style.width = "40px";
+      placeholder.style.height = "56px";
+      placeholder.style.display = "flex";
+      placeholder.style.alignItems = "center";
+      placeholder.style.justifyContent = "center";
+      placeholder.style.backgroundColor = "var(--background-secondary)";
+      placeholder.style.borderRadius = "4px";
+      placeholder.createSpan({ text: "📚" });
+    }
+    
+    // Text info
+    const textContainer = container.createDiv({ cls: "book-candidate-info" });
+    textContainer.style.flex = "1";
+    textContainer.style.minWidth = "0";
+    
+    // Title
+    const titleEl = textContainer.createDiv({ cls: "book-candidate-title" });
+    titleEl.style.fontWeight = "600";
+    titleEl.style.whiteSpace = "nowrap";
+    titleEl.style.overflow = "hidden";
+    titleEl.style.textOverflow = "ellipsis";
+    titleEl.setText(item.title || "Unknown title");
+    
+    // Author & Publisher
+    const metaEl = textContainer.createDiv({ cls: "book-candidate-meta" });
+    metaEl.style.fontSize = "0.85em";
+    metaEl.style.color = "var(--text-muted)";
+    metaEl.style.whiteSpace = "nowrap";
+    metaEl.style.overflow = "hidden";
+    metaEl.style.textOverflow = "ellipsis";
+    
+    const metaParts: string[] = [];
+    if (item.author) metaParts.push(item.author);
+    if (item.publisher) metaParts.push(item.publisher);
+    if (item.publishedYear) metaParts.push(item.publishedYear);
+    
+    metaEl.setText(metaParts.join(" · ") || "");
   }
 
-  onChooseItem(item: KyoboSearchCandidate, evt: MouseEvent | KeyboardEvent): void {
+  onChooseSuggestion(item: KyoboSearchCandidate, evt: MouseEvent | KeyboardEvent): void {
     this.onChoose(item);
   }
 }

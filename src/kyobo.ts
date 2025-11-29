@@ -25,6 +25,7 @@ export interface KyoboSearchCandidate {
   publishedYear: string;
   detailUrl: string;
   isbn?: string;
+  coverImage?: string;
 }
 
 /**
@@ -401,6 +402,24 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
       }
     }
     
+    // Extract cover image from context
+    let coverImage = "";
+    const imagePatterns = [
+      // Kyobo image CDN patterns
+      /<img[^>]*src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i,
+      /<img[^>]*class="[^"]*(?:prod_img|cover|thumb)[^"]*"[^>]*src="([^"]+)"/i,
+      /data-src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i,
+      /<img[^>]*src="([^"]+)"[^>]*class="[^"]*(?:prod_img|cover|thumb)[^"]*"/i,
+    ];
+    
+    for (const pattern of imagePatterns) {
+      const imgMatch = context.match(pattern);
+      if (imgMatch && imgMatch[1]) {
+        coverImage = imgMatch[1];
+        break;
+      }
+    }
+    
     candidates.push({
       title,
       author,
@@ -408,9 +427,10 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
       publishedYear: year,
       detailUrl: url,
       isbn,
+      coverImage,
     });
     
-    console.log(`[Book Voice Capture] Found candidate from data-attr: "${title}" (${pid})`);
+    console.log(`[Book Voice Capture] Found candidate from data-attr: "${title}" (${pid}) cover: ${coverImage ? 'yes' : 'no'}`);
   }
   
   // FALLBACK: If no candidates from checkboxes, try extracting from links
@@ -476,6 +496,13 @@ function parseFromDetailLinks(html: string, seenUrls: Set<string>): KyoboSearchC
     const bidMatch = context.match(/data-bid="(\d{10,13})"/);
     const isbn = bidMatch ? bidMatch[1] : "";
     
+    // Extract cover image
+    let coverImage = "";
+    const imgMatch = context.match(/<img[^>]*src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i);
+    if (imgMatch) {
+      coverImage = imgMatch[1];
+    }
+    
     candidates.push({
       title,
       author: "",
@@ -483,6 +510,7 @@ function parseFromDetailLinks(html: string, seenUrls: Set<string>): KyoboSearchC
       publishedYear: "",
       detailUrl: url,
       isbn,
+      coverImage,
     });
     
     console.log(`[Book Voice Capture] Found candidate from link: "${title}" (${pid})`);
@@ -827,7 +855,7 @@ function isValidTitle(text: string): boolean {
  * Enhanced with quality scoring to prefer candidates with richer metadata.
  */
 function deduplicateAndScore(candidates: KyoboSearchCandidate[], query: string): KyoboSearchCandidate[] {
-  // De-duplicate by URL (keep first occurrence which usually has best metadata)
+  // De-duplicate by URL first
   const urlMap = new Map<string, KyoboSearchCandidate>();
   
   for (const candidate of candidates) {
@@ -855,7 +883,48 @@ function deduplicateAndScore(candidates: KyoboSearchCandidate[], query: string):
     }
   }
   
-  const unique = Array.from(urlMap.values());
+  // Second pass: de-duplicate by normalized title (same book might have different URLs)
+  const titleMap = new Map<string, KyoboSearchCandidate>();
+  
+  for (const candidate of urlMap.values()) {
+    // Normalize title for comparison: lowercase, remove extra spaces, remove common suffixes
+    const normalizedTitle = candidate.title
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/\s*[\(\[].+?[\)\]]\s*$/g, "")  // Remove (edition) or [series] suffixes
+      .trim();
+    
+    const existingCandidate = titleMap.get(normalizedTitle);
+    if (!existingCandidate) {
+      titleMap.set(normalizedTitle, candidate);
+    } else {
+      // Keep the one with more metadata
+      const existingScore = (existingCandidate.author ? 1 : 0) + 
+                           (existingCandidate.publisher ? 1 : 0) + 
+                           (existingCandidate.isbn ? 1 : 0);
+      const newScore = (candidate.author ? 1 : 0) + 
+                      (candidate.publisher ? 1 : 0) + 
+                      (candidate.isbn ? 1 : 0);
+      
+      if (newScore > existingScore) {
+        titleMap.set(normalizedTitle, candidate);
+      } else if (newScore === existingScore) {
+        // Merge metadata from both
+        if (!existingCandidate.author && candidate.author) {
+          existingCandidate.author = candidate.author;
+        }
+        if (!existingCandidate.publisher && candidate.publisher) {
+          existingCandidate.publisher = candidate.publisher;
+        }
+        if (!existingCandidate.isbn && candidate.isbn) {
+          existingCandidate.isbn = candidate.isbn;
+        }
+      }
+    }
+  }
+  
+  const unique = Array.from(titleMap.values());
+  console.log(`[Book Voice Capture] After deduplication: ${unique.length} unique candidates`);
   
   // Filter out low-quality candidates with enhanced validation
   const filtered = unique.filter(c => {
