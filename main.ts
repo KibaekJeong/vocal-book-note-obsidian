@@ -166,15 +166,18 @@ class BookSelectModal extends FuzzySuggestModal<BookNoteItem> {
 class KyoboCandidateModal extends SuggestModal<KyoboSearchCandidate> {
   private candidates: KyoboSearchCandidate[];
   private onChoose: (candidate: KyoboSearchCandidate) => void;
+  private thumbnailSize: number;
 
   constructor(
     app: App,
     candidates: KyoboSearchCandidate[],
-    onChoose: (candidate: KyoboSearchCandidate) => void
+    onChoose: (candidate: KyoboSearchCandidate) => void,
+    thumbnailSize: number = 80
   ) {
     super(app);
     this.candidates = candidates;
     this.onChoose = onChoose;
+    this.thumbnailSize = thumbnailSize;
     this.setPlaceholder("Select a book from search results...");
     
     // Add custom CSS for thumbnails
@@ -200,12 +203,16 @@ class KyoboCandidateModal extends SuggestModal<KyoboSearchCandidate> {
     container.style.gap = "12px";
     container.style.padding = "8px 4px";
     
+    // Calculate height based on width (book cover aspect ratio ~5:7)
+    const thumbWidth = this.thumbnailSize;
+    const thumbHeight = Math.round(thumbWidth * 1.4);
+    
     // Thumbnail
     if (item.coverImage) {
       const imgContainer = container.createDiv({ cls: "book-candidate-thumb" });
       imgContainer.style.flexShrink = "0";
-      imgContainer.style.width = "40px";
-      imgContainer.style.height = "56px";
+      imgContainer.style.width = `${thumbWidth}px`;
+      imgContainer.style.height = `${thumbHeight}px`;
       imgContainer.style.overflow = "hidden";
       imgContainer.style.borderRadius = "4px";
       imgContainer.style.backgroundColor = "var(--background-secondary)";
@@ -226,19 +233,21 @@ class KyoboCandidateModal extends SuggestModal<KyoboSearchCandidate> {
         imgContainer.style.display = "flex";
         imgContainer.style.alignItems = "center";
         imgContainer.style.justifyContent = "center";
+        imgContainer.style.fontSize = `${Math.round(thumbWidth * 0.4)}px`;
         imgContainer.createSpan({ text: "📚" });
       };
     } else {
       // Placeholder for no image
       const placeholder = container.createDiv({ cls: "book-candidate-thumb-placeholder" });
       placeholder.style.flexShrink = "0";
-      placeholder.style.width = "40px";
-      placeholder.style.height = "56px";
+      placeholder.style.width = `${thumbWidth}px`;
+      placeholder.style.height = `${thumbHeight}px`;
       placeholder.style.display = "flex";
       placeholder.style.alignItems = "center";
       placeholder.style.justifyContent = "center";
       placeholder.style.backgroundColor = "var(--background-secondary)";
       placeholder.style.borderRadius = "4px";
+      placeholder.style.fontSize = `${Math.round(thumbWidth * 0.4)}px`;
       placeholder.createSpan({ text: "📚" });
     }
     
@@ -812,7 +821,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
         candidates,
         async (candidate: KyoboSearchCandidate) => {
           await this.processSelectedCandidate(candidate);
-        }
+        },
+        this.settings.thumbnailSize
       ).open();
 
     } catch (error) {

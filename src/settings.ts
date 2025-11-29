@@ -25,6 +25,8 @@ export interface BookVoiceCaptureSettings {
   gptSummaryModel: string;
   gptMaxTokens: number;
   gptTemperature: number;
+  // UI settings
+  thumbnailSize: number;
 }
 
 export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
@@ -40,6 +42,8 @@ export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
   gptSummaryModel: "gpt-4o-mini",
   gptMaxTokens: 2500,
   gptTemperature: 0.7,
+  // UI defaults
+  thumbnailSize: 80,
   bookNoteTemplate: `---
 Type: Book
 Area: ""
@@ -166,6 +170,21 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.kyoboEnabled)
           .onChange(async (value: boolean) => {
             this.plugin.settings.kyoboEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Thumbnail Size
+    new Setting(containerEl)
+      .setName("Book Thumbnail Size")
+      .setDesc("Size of book cover thumbnails in the search results (width in pixels). Default: 80.")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder("80")
+          .setValue(String(this.plugin.settings.thumbnailSize))
+          .onChange(async (value: string) => {
+            const parsed = parseInt(value, 10);
+            this.plugin.settings.thumbnailSize = isNaN(parsed) ? 80 : Math.max(30, Math.min(200, parsed));
             await this.plugin.saveSettings();
           })
       );
