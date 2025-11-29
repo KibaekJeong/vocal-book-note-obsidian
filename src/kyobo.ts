@@ -402,23 +402,9 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
       }
     }
     
-    // Extract cover image from context
-    let coverImage = "";
-    const imagePatterns = [
-      // Kyobo image CDN patterns
-      /<img[^>]*src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i,
-      /<img[^>]*class="[^"]*(?:prod_img|cover|thumb)[^"]*"[^>]*src="([^"]+)"/i,
-      /data-src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i,
-      /<img[^>]*src="([^"]+)"[^>]*class="[^"]*(?:prod_img|cover|thumb)[^"]*"/i,
-    ];
-    
-    for (const pattern of imagePatterns) {
-      const imgMatch = context.match(pattern);
-      if (imgMatch && imgMatch[1]) {
-        coverImage = imgMatch[1];
-        break;
-      }
-    }
+    // Build cover image URL from data-bid (ISBN)
+    // Pattern: https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/{isbn}.jpg
+    const coverImage = isbn ? `https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/${isbn}.jpg` : "";
     
     candidates.push({
       title,
@@ -430,7 +416,7 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
       coverImage,
     });
     
-    console.log(`[Book Voice Capture] Found candidate from data-attr: "${title}" (${pid}) cover: ${coverImage ? 'yes' : 'no'}`);
+    console.log(`[Book Voice Capture] Found candidate from data-attr: "${title}" (${pid}) isbn: ${isbn}`);
   }
   
   // FALLBACK: If no candidates from checkboxes, try extracting from links
@@ -496,12 +482,8 @@ function parseFromDetailLinks(html: string, seenUrls: Set<string>): KyoboSearchC
     const bidMatch = context.match(/data-bid="(\d{10,13})"/);
     const isbn = bidMatch ? bidMatch[1] : "";
     
-    // Extract cover image
-    let coverImage = "";
-    const imgMatch = context.match(/<img[^>]*src="(https?:\/\/contents\.kyobobook\.co\.kr[^"]+)"/i);
-    if (imgMatch) {
-      coverImage = imgMatch[1];
-    }
+    // Build cover image URL from ISBN
+    const coverImage = isbn ? `https://contents.kyobobook.co.kr/sih/fit-in/200x0/pdt/${isbn}.jpg` : "";
     
     candidates.push({
       title,
