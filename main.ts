@@ -182,23 +182,9 @@ class KyoboCandidateModal extends FuzzySuggestModal<KyoboSearchCandidate> {
   }
 
   getItemText(item: KyoboSearchCandidate): string {
-    // Ensure we have a valid title to display
-    const title = item.title || "(Unknown Title)";
-    const parts: string[] = [title];
-    
-    if (item.author && item.author.length > 0) {
-      parts.push(`— ${item.author}`);
-    }
-    if (item.publisher && item.publisher.length > 0) {
-      parts.push(`(${item.publisher})`);
-    }
-    if (item.publishedYear && item.publishedYear.length > 0) {
-      parts.push(`[${item.publishedYear}]`);
-    }
-    
-    const result = parts.join(" ");
-    console.log("[Book Voice Capture] Display text:", result);
-    return result;
+    const title = item.title?.trim() || "Unknown title";
+    const author = item.author?.trim();
+    return author ? `${title} - ${author}` : title;
   }
 
   onChooseItem(item: KyoboSearchCandidate, evt: MouseEvent | KeyboardEvent): void {

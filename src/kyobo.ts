@@ -230,13 +230,17 @@ function extractCandidateFromBlock(block: string, seenUrls: Set<string>): KyoboS
   
   if (!title) return null;
   
-  // Extract author - try Kyobo-specific patterns
+  // Extract author - try Kyobo-specific patterns (aligned with detail page extraction)
   let author = "";
   const authorPatterns = [
     // Kyobo specific: author class variants
     /class="[^"]*(?:prod_author|author|info_auth)[^"]*"[^>]*>([^<]+)</i,
+    // Author box with link (common in Kyobo search results)
+    /<div[^>]*class="[^"]*author_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
     // Microdata: itemprop="author"
-    /itemprop="author"[^>]*>([^<]+)</i,
+    /itemprop="author"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
+    // Meta tag author
+    /<meta\s+name="author"\s+content="([^"]+)"/i,
     // Korean labels with author name
     /(?:저자|지은이|글)\s*[:\s]*(?:<[^>]*>)*([가-힣a-zA-Z][가-힣a-zA-Z\s\.,·]+)/i,
     // Author name followed by "저" (author marker)
@@ -245,8 +249,10 @@ function extractCandidateFromBlock(block: string, seenUrls: Set<string>): KyoboS
   
   for (const pattern of authorPatterns) {
     const authorMatch = block.match(pattern);
-    if (authorMatch && authorMatch[1]) {
-      const extracted = cleanText(authorMatch[1]);
+    if (authorMatch) {
+      // Handle patterns with multiple capture groups (e.g., content attr or inner text)
+      const rawValue = authorMatch[1] || authorMatch[2] || "";
+      const extracted = cleanText(rawValue);
       // Filter out noise: too short or UI text
       if (extracted.length > 1 && !extracted.match(/^(저자|지은이|글|Author)$/i)) {
         author = extracted;
@@ -255,21 +261,25 @@ function extractCandidateFromBlock(block: string, seenUrls: Set<string>): KyoboS
     }
   }
   
-  // Extract publisher - Kyobo-specific patterns
+  // Extract publisher - Kyobo-specific patterns (aligned with detail page extraction)
   let publisher = "";
   const publisherPatterns = [
     // Kyobo specific: publisher class
     /class="[^"]*(?:prod_publish|publisher|info_pub)[^"]*"[^>]*>([^<]+)</i,
+    // Publisher box with link (common in Kyobo search results)
+    /<div[^>]*class="[^"]*publish_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
     // Microdata: itemprop="publisher"
-    /itemprop="publisher"[^>]*>([^<]+)</i,
+    /itemprop="publisher"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
     // Korean labels
     /(?:출판사|출판|발행처)\s*[:\s]*(?:<[^>]*>)*([가-힣a-zA-Z][가-힣a-zA-Z\s\.,&]+)/i,
   ];
   
   for (const pattern of publisherPatterns) {
     const publisherMatch = block.match(pattern);
-    if (publisherMatch && publisherMatch[1]) {
-      const extracted = cleanText(publisherMatch[1]);
+    if (publisherMatch) {
+      // Handle patterns with multiple capture groups (e.g., content attr or inner text)
+      const rawValue = publisherMatch[1] || publisherMatch[2] || "";
+      const extracted = cleanText(rawValue);
       if (extracted.length > 1 && !extracted.match(/^(출판사|출판|발행처|Publisher)$/i)) {
         publisher = extracted;
         break;
@@ -392,35 +402,41 @@ function parseDetailUrlsWithContext(html: string, seenUrls: Set<string>): KyoboS
     // Skip if no meaningful title found
     if (!title) continue;
     
-    // Extract author from context - multiple patterns
+    // Extract author from context - multiple patterns (aligned with detail page extraction)
     let author = "";
     const authorPatterns = [
+      /class="[^"]*(?:prod_author|author|info_auth)[^"]*"[^>]*>([^<]+)</i,
+      /<div[^>]*class="[^"]*author_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
+      /itemprop="author"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
       /(?:저자|지은이|글)\s*[:\s]*(?:<[^>]*>)*([가-힣a-zA-Z][가-힣a-zA-Z\s\.,·]+)/i,
       /([가-힣a-zA-Z][가-힣a-zA-Z\s\.,·]+)\s*저(?:\s|<|$)/i,
-      /class="[^"]*author[^"]*"[^>]*>([^<]+)</i,
     ];
     for (const pattern of authorPatterns) {
       const authorMatch = context.match(pattern);
-      if (authorMatch && authorMatch[1]) {
-        const extracted = cleanText(authorMatch[1]);
-        if (extracted.length > 1 && !extracted.match(/^(저자|지은이|글)$/i)) {
+      if (authorMatch) {
+        const rawValue = authorMatch[1] || authorMatch[2] || "";
+        const extracted = cleanText(rawValue);
+        if (extracted.length > 1 && !extracted.match(/^(저자|지은이|글|Author)$/i)) {
           author = extracted;
           break;
         }
       }
     }
     
-    // Extract publisher from context
+    // Extract publisher from context (aligned with detail page extraction)
     let publisher = "";
     const publisherPatterns = [
+      /class="[^"]*(?:prod_publish|publisher|info_pub)[^"]*"[^>]*>([^<]+)</i,
+      /<div[^>]*class="[^"]*publish_box[^"]*"[^>]*>[\s\S]*?<a[^>]*>([^<]+)</i,
+      /itemprop="publisher"[^>]*(?:content="([^"]+)"|>([^<]+)<)/i,
       /(?:출판사|출판|발행처)\s*[:\s]*(?:<[^>]*>)*([가-힣a-zA-Z][가-힣a-zA-Z\s\.,&]+)/i,
-      /class="[^"]*publish[^"]*"[^>]*>([^<]+)</i,
     ];
     for (const pattern of publisherPatterns) {
       const publisherMatch = context.match(pattern);
-      if (publisherMatch && publisherMatch[1]) {
-        const extracted = cleanText(publisherMatch[1]);
-        if (extracted.length > 1 && !extracted.match(/^(출판사|출판|발행처)$/i)) {
+      if (publisherMatch) {
+        const rawValue = publisherMatch[1] || publisherMatch[2] || "";
+        const extracted = cleanText(rawValue);
+        if (extracted.length > 1 && !extracted.match(/^(출판사|출판|발행처|Publisher)$/i)) {
           publisher = extracted;
           break;
         }
