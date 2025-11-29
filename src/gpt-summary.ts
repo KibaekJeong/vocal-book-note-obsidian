@@ -2,9 +2,10 @@ import { requestUrl, RequestUrlResponse } from "obsidian";
 import { BookMeta } from "./kyobo";
 
 /**
- * GPT Summary section marker for idempotency checks
+ * GPT Summary section markers for idempotency checks (both languages)
  */
-export const GPT_SUMMARY_SECTION = "## 🧭 Overview";
+export const GPT_SUMMARY_SECTION_EN = "## 🧭 Overview";
+export const GPT_SUMMARY_SECTION_KO = "## 🧭 요약";
 
 /**
  * Result from GPT summary generation
@@ -207,11 +208,12 @@ export function formatGptSummarySection(gptResponse: string): string {
 /**
  * Create a GPT summary section with a failure/unavailable status.
  * This makes failures visible in the note itself for transparency.
+ * Uses English header as default for error cases.
  */
 export function formatGptSummaryUnavailable(reason: string): string {
   const timestamp = new Date().toISOString().split("T")[0];
   
-  return `${GPT_SUMMARY_SECTION}
+  return `${GPT_SUMMARY_SECTION_EN}
 
 > **What this book is about:**  
 > ⚠️ **GPT summary unavailable** (${timestamp}) - ${reason}
@@ -240,10 +242,10 @@ export function formatGptSummaryUnavailable(reason: string): string {
 }
 
 /**
- * Check if a note already contains the GPT Summary section
+ * Check if a note already contains the GPT Summary section (either English or Korean)
  */
 export function hasGptSummarySection(content: string): boolean {
-  return content.includes(GPT_SUMMARY_SECTION);
+  return content.includes(GPT_SUMMARY_SECTION_EN) || content.includes(GPT_SUMMARY_SECTION_KO);
 }
 
 /**
