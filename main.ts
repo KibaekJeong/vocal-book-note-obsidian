@@ -26,6 +26,7 @@ import {
 } from "./src/kyobo";
 import {
   RecordingModal,
+  AudioFileModal,
   transcribeAudio,
   parseTranscription,
 } from "./src/voice";
@@ -327,6 +328,15 @@ export default class BookVoiceCapturePlugin extends Plugin {
       name: "Add Voice Highlight (Current Note)",
       editorCallback: (editor: Editor, view: MarkdownView) => {
         this.addVoiceHighlight(editor, view);
+      },
+    });
+
+    // Command: Import Voice Note from File (for current note)
+    this.addCommand({
+      id: "book-voice-capture-import-audio",
+      name: "Import Voice Note from File",
+      editorCallback: (editor: Editor, view: MarkdownView) => {
+        this.importVoiceNoteFromFile(editor, view);
       },
     });
 
@@ -962,6 +972,50 @@ export default class BookVoiceCapturePlugin extends Plugin {
    */
   private removePlaceholder(editor: Editor): void {
     removePlaceholderBlock(editor);
+  }
+
+  /**
+   * Command handler: Import Voice Note from File (for current note)
+   */
+  private importVoiceNoteFromFile(editor: Editor, view: MarkdownView): void {
+    // Check API key
+    if (!this.settings.openAIApiKey) {
+      new Notice("Please set your OpenAI API key in Book Voice Capture settings.");
+      return;
+    }
+
+    // Check if current file is a book note
+    const file = view.file;
+    let isBook = false;
+    const content = editor.getValue();
+    
+    if (file) {
+      isBook = isBookNoteFromCache(this.app, file);
+    }
+    
+    // Fallback to content-based check
+    if (!isBook) {
+      isBook = isBookNote(content);
+    }
+    
+    if (!isBook) {
+      new Notice("Active note is not a book note (missing 'type: book' in frontmatter).");
+      return;
+    }
+
+    const language = this.inferLanguageFromContent(content);
+
+    // Open upload modal
+    new AudioFileModal(
+      this.app,
+      async (file: File) => {
+        // Reuse existing processing logic which handles both Blob and File
+        await this.processVoiceRecording(file, editor, language);
+      },
+      () => {
+        new Notice("Import cancelled");
+      }
+    ).open();
   }
 
   /**

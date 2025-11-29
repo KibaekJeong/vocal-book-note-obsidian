@@ -21,8 +21,12 @@
 .book-voice-capture-recording-dot {
   width: 12px;
   height: 12px;
-  background-color: #e74c3c;
+  background-color: #ccc;
   border-radius: 50%;
+}
+
+.book-voice-capture-recording-dot.active {
+  background-color: #e74c3c;
   animation: book-voice-capture-pulse 1s infinite;
 }
 
@@ -48,6 +52,20 @@
   gap: 12px;
   margin-top: 8px;
   width: 100%;
+}
+
+.book-voice-capture-start-btn {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  padding: 8px 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  font-size: 1em;
+}
+
+.book-voice-capture-start-btn:hover {
+  background-color: var(--interactive-accent-hover);
 }
 
 .book-voice-capture-stop-btn {

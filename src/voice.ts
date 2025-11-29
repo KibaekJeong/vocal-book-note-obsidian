@@ -18,13 +18,16 @@ export class RecordingModal extends Modal {
   private startTime: number = 0;
   private timerEl: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
+  private startBtn: HTMLButtonElement | null = null;
+  private uploadBtn: HTMLButtonElement | null = null;
   private stopBtn: HTMLButtonElement | null = null;
-  private onComplete: (blob: Blob) => void;
+  private onComplete: (blob: Blob) => Promise<void> | void;
   private onCancel: () => void;
+  private recordingDot: HTMLElement | null = null;
 
   constructor(
     app: App,
-    onComplete: (blob: Blob) => void,
+    onComplete: (blob: Blob) => Promise<void> | void,
     onCancel: () => void
   ) {
     super(app);
@@ -42,8 +45,11 @@ export class RecordingModal extends Modal {
 
     // Recording indicator
     const indicatorEl = contentEl.createDiv({ cls: "book-voice-capture-recording-indicator" });
-    indicatorEl.createDiv({ cls: "book-voice-capture-recording-dot" });
-    this.statusEl = indicatorEl.createSpan({ text: "Recording..." });
+    this.recordingDot = indicatorEl.createDiv({ cls: "book-voice-capture-recording-dot" });
+    // Initially inactive
+    this.recordingDot.removeClass("active");
+    
+    this.statusEl = indicatorEl.createSpan({ text: "Ready to record" });
 
     // Timer
     this.timerEl = contentEl.createDiv({ cls: "book-voice-capture-timer", text: "00:00" });
@@ -54,22 +60,80 @@ export class RecordingModal extends Modal {
       cls: "book-voice-capture-instructions"
     });
 
+    // Hidden file input for upload
+    const fileInput = contentEl.createEl("input", {
+      type: "file",
+      attr: { 
+        accept: "audio/*,.mp3,.m4a,.wav,.ogg,.webm",
+        style: "display: none;"
+      }
+    });
+    
+    fileInput.addEventListener("change", async () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        
+        // Show processing state
+        this.setProcessingState();
+        
+        try {
+          await this.onComplete(file);
+        } catch (e) {
+          console.error(e);
+          new Notice("Processing failed");
+        }
+        
+        // Reset UI for next action
+        fileInput.value = ""; // Clear input
+        this.resetToReadyState();
+      }
+    });
+
     // Buttons
     const buttonsEl = contentEl.createDiv({ cls: "book-voice-capture-buttons" });
     
+    // Start Button
+    this.startBtn = buttonsEl.createEl("button", { 
+      text: "Start Recording",
+      cls: "book-voice-capture-start-btn"
+    });
+    this.startBtn.onclick = (): void => {
+      this.initiateRecording();
+    };
+
+    // Upload Button
+    this.uploadBtn = buttonsEl.createEl("button", { 
+      text: "Upload File",
+      cls: "book-voice-capture-upload-btn"
+    });
+    this.uploadBtn.onclick = (): void => {
+      fileInput.click();
+    };
+
+    // Stop Button (Hidden initially)
     this.stopBtn = buttonsEl.createEl("button", { 
       text: "Stop & Transcribe",
       cls: "book-voice-capture-stop-btn"
     });
+    this.stopBtn.style.display = "none";
     this.stopBtn.onclick = (): void => this.stopRecording();
 
+    // Cancel Button
     const cancelBtn = buttonsEl.createEl("button", { 
       text: "Cancel",
       cls: "book-voice-capture-cancel-btn"
     });
     cancelBtn.onclick = (): void => this.cancelRecording();
+  }
 
-    // Start recording
+  private async initiateRecording(): Promise<void> {
+    // Update UI state
+    if (this.startBtn) this.startBtn.style.display = "none";
+    if (this.uploadBtn) this.uploadBtn.style.display = "none";
+    if (this.stopBtn) this.stopBtn.style.display = "inline-block"; // or block/flex depending on css
+    if (this.statusEl) this.statusEl.textContent = "Recording...";
+    if (this.recordingDot) this.recordingDot.addClass("active");
+    
     await this.startRecording();
   }
 
@@ -94,12 +158,19 @@ export class RecordingModal extends Modal {
         }
       };
 
-      this.mediaRecorder.onstop = (): void => {
+      this.mediaRecorder.onstop = async (): Promise<void> => {
         const mimeType = this.mediaRecorder?.mimeType || "audio/webm";
         const audioBlob = new Blob(this.audioChunks, { type: mimeType });
         this.cleanup();
-        this.close();
-        this.onComplete(audioBlob);
+        
+        try {
+          await this.onComplete(audioBlob);
+        } catch (e) {
+          console.error(e);
+          new Notice("Processing failed");
+        }
+        
+        this.resetToReadyState();
       };
 
       this.mediaRecorder.onerror = (): void => {
@@ -149,16 +220,39 @@ export class RecordingModal extends Modal {
     }, 1000);
   }
 
+  private setProcessingState(): void {
+    if (this.startBtn) this.startBtn.style.display = "none";
+    if (this.uploadBtn) this.uploadBtn.style.display = "none";
+    
+    // Show stop button in disabled "Processing" state if not already visible
+    if (this.stopBtn) {
+      this.stopBtn.style.display = "inline-block";
+      this.stopBtn.disabled = true;
+      this.stopBtn.textContent = "Processing...";
+    }
+    
+    if (this.statusEl) this.statusEl.textContent = "Transcribing...";
+    if (this.recordingDot) this.recordingDot.removeClass("active");
+  }
+
+  private resetToReadyState(): void {
+    if (this.startBtn) this.startBtn.style.display = "inline-block";
+    if (this.uploadBtn) this.uploadBtn.style.display = "inline-block";
+    
+    if (this.stopBtn) {
+      this.stopBtn.style.display = "none";
+      this.stopBtn.disabled = false;
+      this.stopBtn.textContent = "Stop & Transcribe";
+    }
+    
+    if (this.statusEl) this.statusEl.textContent = "Ready to record";
+    if (this.timerEl) this.timerEl.textContent = "00:00";
+    if (this.recordingDot) this.recordingDot.removeClass("active");
+  }
+
   private stopRecording(): void {
     if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
-      // Disable button and update status to prevent double-clicks
-      if (this.stopBtn) {
-        this.stopBtn.disabled = true;
-        this.stopBtn.textContent = "Processing...";
-      }
-      if (this.statusEl) {
-        this.statusEl.textContent = "Stopping...";
-      }
+      this.setProcessingState();
       this.mediaRecorder.stop();
     }
   }
@@ -182,6 +276,85 @@ export class RecordingModal extends Modal {
 
   onClose(): void {
     this.cleanup();
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+/**
+ * Modal for uploading an existing audio file for transcription
+ */
+export class AudioFileModal extends Modal {
+  private onComplete: (file: File) => void;
+  private onCancel: () => void;
+
+  constructor(
+    app: App,
+    onComplete: (file: File) => void,
+    onCancel: () => void
+  ) {
+    super(app);
+    this.onComplete = onComplete;
+    this.onCancel = onCancel;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("book-voice-capture-upload-modal");
+
+    contentEl.createEl("h3", { text: "Import Audio File" });
+    contentEl.createEl("p", { text: "Select an audio file (mp3, m4a, wav, ogg, webm) to transcribe." });
+
+    const container = contentEl.createDiv({ cls: "book-voice-capture-upload-container" });
+    
+    // File input
+    const fileInput = container.createEl("input", { 
+      type: "file",
+      attr: { 
+        accept: "audio/*,.mp3,.m4a,.wav,.ogg,.webm" 
+      }
+    });
+
+    // Buttons container
+    const buttonsEl = container.createDiv({ cls: "book-voice-capture-buttons" });
+    buttonsEl.style.marginTop = "16px";
+
+    // Transcribe Button
+    const submitBtn = buttonsEl.createEl("button", { 
+      text: "Transcribe",
+      cls: "mod-cta"
+    });
+    submitBtn.disabled = true;
+    
+    // Cancel Button
+    const cancelBtn = buttonsEl.createEl("button", { 
+      text: "Cancel",
+      cls: "book-voice-capture-cancel-btn"
+    });
+    cancelBtn.onclick = () => {
+      this.close();
+      this.onCancel();
+    };
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        submitBtn.disabled = false;
+      } else {
+        submitBtn.disabled = true;
+      }
+    });
+
+    submitBtn.onclick = () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        this.close();
+        this.onComplete(file);
+      }
+    };
+  }
+
+  onClose(): void {
     const { contentEl } = this;
     contentEl.empty();
   }
