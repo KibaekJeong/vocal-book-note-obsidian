@@ -305,73 +305,60 @@ function extractCandidateFromJsonLd(
 }
 
 /**
- * Parse product list items by finding all detail links and extracting info from surrounding context
+ * Parse product list items by extracting data from checkbox data attributes
+ * Kyobo stores book info in: data-pid, data-bid, data-name on input.result_checkbox elements
  */
 function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearchCandidate[] {
   const candidates: KyoboSearchCandidate[] = [];
   
-  // Log what patterns we find for debugging
-  const prodAreaCount = (html.match(/prod_area/gi) || []).length;
-  const prodInfoCount = (html.match(/prod_info/gi) || []).length;
-  const itemListCount = (html.match(/item_list/gi) || []).length;
-  console.log(`[Book Voice Capture] HTML contains: prod_area=${prodAreaCount}, prod_info=${prodInfoCount}, item_list=${itemListCount}`);
+  // Count checkboxes for debugging
+  const checkboxCount = (html.match(/result_checkbox/gi) || []).length;
+  const dataPidCount = (html.match(/data-pid="/gi) || []).length;
+  const dataNameCount = (html.match(/data-name="/gi) || []).length;
+  console.log(`[Book Voice Capture] HTML contains: result_checkbox=${checkboxCount}, data-pid=${dataPidCount}, data-name=${dataNameCount}`);
   
-  // NEW APPROACH: Find all detail page links with their surrounding context
-  // This is more reliable than trying to match complex nested HTML structures
-  
-  // Pattern to find detail links - captures URL and looks for title in the link or nearby
-  const detailLinkPattern = /<a[^>]*href="(https?:\/\/product\.kyobobook\.co\.kr\/detail\/[^"]+)"[^>]*>([^<]*)<\/a>/gi;
+  // PRIMARY METHOD: Extract from input checkbox data attributes
+  // Pattern: <input ... data-pid="S000001810323" data-bid="9791162243596" data-name="책 제목" ...>
+  const checkboxPattern = /<input[^>]*class="[^"]*result_checkbox[^"]*"[^>]*>/gi;
   
   let match;
-  while ((match = detailLinkPattern.exec(html)) !== null) {
-    const url = match[1];
-    const linkText = cleanText(match[2]);
+  while ((match = checkboxPattern.exec(html)) !== null) {
+    const inputTag = match[0];
     
+    // Extract data-pid (product ID)
+    const pidMatch = inputTag.match(/data-pid="([^"]+)"/);
+    if (!pidMatch) continue;
+    const pid = pidMatch[1];
+    
+    // Build URL from product ID
+    const url = `https://product.kyobobook.co.kr/detail/${pid}`;
     if (seenUrls.has(url)) continue;
     
-    // Get context around this link (2000 chars before and after)
-    const contextStart = Math.max(0, match.index - 2000);
-    const contextEnd = Math.min(html.length, match.index + match[0].length + 2000);
-    const context = html.substring(contextStart, contextEnd);
+    // Extract data-name (book title)
+    const nameMatch = inputTag.match(/data-name="([^"]+)"/);
+    if (!nameMatch) continue;
+    const title = cleanText(nameMatch[1]);
     
-    // Extract title - prefer link text if it looks like a book title
-    let title = "";
-    
-    // First, check if link text is a valid title (not empty, not just numbers, not UI element)
-    if (linkText && linkText.length >= 2 && isValidBookTitle(linkText)) {
-      title = linkText;
-    }
-    
-    // If no title from link text, look in context for prod_name or similar
-    if (!title) {
-      const titlePatterns = [
-        /<[^>]*class="[^"]*prod_name[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
-        /<[^>]*class="[^"]*prod_title[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
-        /<strong[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/strong>/i,
-        /<span[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/span>/i,
-      ];
-      
-      for (const pattern of titlePatterns) {
-        const titleMatch = context.match(pattern);
-        if (titleMatch && titleMatch[1] && isValidBookTitle(cleanText(titleMatch[1]))) {
-          title = cleanText(titleMatch[1]);
-          break;
-        }
-      }
-    }
-    
-    // Skip if no valid title found
-    if (!title) continue;
+    if (!title || title.length < 2) continue;
     
     seenUrls.add(url);
+    
+    // Extract data-bid (ISBN)
+    const bidMatch = inputTag.match(/data-bid="([^"]+)"/);
+    const isbn = bidMatch ? bidMatch[1] : "";
+    
+    // Get surrounding context for author/publisher extraction
+    const contextStart = Math.max(0, match.index - 3000);
+    const contextEnd = Math.min(html.length, match.index + 3000);
+    const context = html.substring(contextStart, contextEnd);
     
     // Extract author from context
     let author = "";
     const authorPatterns = [
       /<[^>]*class="[^"]*(?:author|prod_author|info_auth)[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
       /<a[^>]*class="[^"]*author[^"]*"[^>]*>([^<]+)<\/a>/i,
-      /저[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
-      /지은이[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
+      /<span[^>]*class="[^"]*author[^"]*"[^>]*>([^<]+)<\/span>/i,
+      /저자[:\s]*([^<\n]+)/i,
     ];
     
     for (const pattern of authorPatterns) {
@@ -390,7 +377,7 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
     const publisherPatterns = [
       /<[^>]*class="[^"]*(?:publisher|prod_publish|info_pub)[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
       /<a[^>]*class="[^"]*publish[^"]*"[^>]*>([^<]+)<\/a>/i,
-      /출판[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
+      /<span[^>]*class="[^"]*publish[^"]*"[^>]*>([^<]+)<\/span>/i,
     ];
     
     for (const pattern of publisherPatterns) {
@@ -420,52 +407,88 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
       publisher,
       publishedYear: year,
       detailUrl: url,
-      isbn: "",
+      isbn,
     });
     
-    console.log(`[Book Voice Capture] Found candidate: "${title}" by "${author}" (${publisher})`);
+    console.log(`[Book Voice Capture] Found candidate from data-attr: "${title}" (${pid})`);
+  }
+  
+  // FALLBACK: If no candidates from checkboxes, try extracting from links
+  if (candidates.length === 0) {
+    console.log(`[Book Voice Capture] No checkbox candidates, trying link extraction...`);
+    const linkCandidates = parseFromDetailLinks(html, seenUrls);
+    candidates.push(...linkCandidates);
   }
   
   return candidates;
 }
 
 /**
- * Check if text looks like a valid book title (not a UI element or garbage)
+ * Fallback: Parse from detail page links with surrounding context
  */
-function isValidBookTitle(text: string): boolean {
-  if (!text || text.length < 2) return false;
+function parseFromDetailLinks(html: string, seenUrls: Set<string>): KyoboSearchCandidate[] {
+  const candidates: KyoboSearchCandidate[] = [];
   
-  // Reject patterns that are clearly not book titles
-  const invalidPatterns = [
-    /^Book\s+\w+$/i,
-    /^[A-Z0-9]{6,}$/,  // Product IDs
-    /^\d+$/,  // Pure numbers
-    /^97[89]\d{10}$/,  // ISBN
-    /^[A-Z]\d{12,}$/i,  // SKU patterns
-  ];
+  // Find all detail URLs
+  const urlPattern = /href="(https?:\/\/product\.kyobobook\.co\.kr\/detail\/([^"]+))"/gi;
   
-  for (const pattern of invalidPatterns) {
-    if (pattern.test(text)) return false;
+  let match;
+  while ((match = urlPattern.exec(html)) !== null) {
+    const url = match[1];
+    const pid = match[2];
+    
+    if (seenUrls.has(url)) continue;
+    
+    // Get context around this link
+    const contextStart = Math.max(0, match.index - 2000);
+    const contextEnd = Math.min(html.length, match.index + 2000);
+    const context = html.substring(contextStart, contextEnd);
+    
+    // Try to find title from data-name attribute nearby
+    const dataNameMatch = context.match(/data-name="([^"]+)"/);
+    let title = "";
+    
+    if (dataNameMatch) {
+      title = cleanText(dataNameMatch[1]);
+    }
+    
+    // If no data-name, try prod_name class
+    if (!title) {
+      const prodNameMatch = context.match(/<[^>]*class="[^"]*prod_name[^"]*"[^>]*>([^<]+)</i);
+      if (prodNameMatch) {
+        title = cleanText(prodNameMatch[1]);
+      }
+    }
+    
+    // If still no title, try link text
+    if (!title) {
+      const linkTextMatch = html.substring(match.index, match.index + 500).match(/<a[^>]*>[^<]*?([가-힣a-zA-Z][^<]{2,50})<\/a>/i);
+      if (linkTextMatch) {
+        title = cleanText(linkTextMatch[1]);
+      }
+    }
+    
+    if (!title || title.length < 2) continue;
+    
+    seenUrls.add(url);
+    
+    // Extract ISBN from data-bid
+    const bidMatch = context.match(/data-bid="(\d{10,13})"/);
+    const isbn = bidMatch ? bidMatch[1] : "";
+    
+    candidates.push({
+      title,
+      author: "",
+      publisher: "",
+      publishedYear: "",
+      detailUrl: url,
+      isbn,
+    });
+    
+    console.log(`[Book Voice Capture] Found candidate from link: "${title}" (${pid})`);
   }
   
-  // Reject common Korean UI elements
-  const koreanUiElements = [
-    "이전", "다음", "더보기", "상세", "닫기", "목록", "검색", "장바구니",
-    "정가", "판매가", "적립", "배송", "품절", "절판", "예약", "주문",
-    "바로가기", "리뷰", "평점", "별점", "공유", "찜", "선물", "구매",
-    "책 그리고 꽃", "BI", "로고", "메뉴", "홈", "마이페이지"
-  ];
-  
-  const textLower = text.toLowerCase().trim();
-  for (const elem of koreanUiElements) {
-    if (textLower === elem.toLowerCase()) return false;
-  }
-  
-  // Must contain Korean or meaningful Latin text
-  const hasKorean = /[가-힣]/.test(text);
-  const hasLatinWords = /[a-zA-Z]{2,}/.test(text);
-  
-  return hasKorean || hasLatinWords;
+  return candidates;
 }
 
 /**
