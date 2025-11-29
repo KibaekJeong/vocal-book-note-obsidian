@@ -697,7 +697,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
     new Notice(`Searching for "${query}"...`);
 
     if (!this.settings.kyoboEnabled) {
-      // Kyobo disabled, create note with query as title and start recording
+      // Kyobo disabled, create note with query as title
+      new Notice("Kyobo scraping is disabled. Creating note with title only.");
       const meta: BookMeta = { title: query, author: "" };
       await this.createBookNote(meta);
       return;
@@ -705,18 +706,20 @@ export default class BookVoiceCapturePlugin extends Plugin {
 
     try {
       // Fetch search candidates
+      console.log("[Book Voice Capture] Fetching Kyobo candidates for:", query);
       const candidates = await fetchKyoboSearchCandidates(query);
+      console.log("[Book Voice Capture] Received candidates:", candidates.length);
 
       if (candidates.length === 0) {
         // No results - use query as title
-        new Notice("No books found on Kyobo, creating note with title only");
+        new Notice("No books found on Kyobo. Creating note with title only.");
         const meta: BookMeta = { title: query, author: "" };
         await this.createBookNote(meta);
         return;
       }
 
       // Always show selection modal, even for single result, to prevent wrong book selection
-      new Notice(`Found ${candidates.length} books. Please select one.`);
+      new Notice(`Found ${candidates.length} book(s). Please select one.`);
       new KyoboCandidateModal(
         this.app,
         candidates,
@@ -727,7 +730,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
 
     } catch (error) {
       console.error("[Book Voice Capture] Kyobo search error:", error);
-      new Notice("Kyobo search failed, creating note with title only");
+      new Notice(`Kyobo search failed: ${error instanceof Error ? error.message : "Unknown error"}. Creating note with title only.`);
       const meta: BookMeta = { title: query, author: "" };
       await this.createBookNote(meta);
     }
