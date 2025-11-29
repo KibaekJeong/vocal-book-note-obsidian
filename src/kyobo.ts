@@ -305,7 +305,7 @@ function extractCandidateFromJsonLd(
 }
 
 /**
- * Parse product list items with surrounding metadata spans
+ * Parse product list items by finding all detail links and extracting info from surrounding context
  */
 function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearchCandidate[] {
   const candidates: KyoboSearchCandidate[] = [];
@@ -316,35 +316,156 @@ function parseProductListItems(html: string, seenUrls: Set<string>): KyoboSearch
   const itemListCount = (html.match(/item_list/gi) || []).length;
   console.log(`[Book Voice Capture] HTML contains: prod_area=${prodAreaCount}, prod_info=${prodInfoCount}, item_list=${itemListCount}`);
   
-  // Pattern to find product item blocks (Kyobo uses various class patterns)
-  // Using more specific patterns based on common Kyobo structures
-  const productBlockPatterns = [
-    // Kyobo product area (large block containing book info)
-    /<div[^>]*class="[^"]*prod_area[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi,
-    // Product info container
-    /<div[^>]*class="[^"]*prod_info[^"]*"[^>]*>([\s\S]*?)(?:<\/div>\s*){2,}/gi,
-    // Item in list
-    /<li[^>]*class="[^"]*(?:item|result)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
-    // Generic list items with detail links
-    /<li[^>]*>([\s\S]*?href="[^"]*product\.kyobobook\.co\.kr\/detail\/[^"]+"[\s\S]*?)<\/li>/gi,
-    // Card-style items
-    /<div[^>]*class="[^"]*(?:card|book_item|product_card)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-  ];
+  // NEW APPROACH: Find all detail page links with their surrounding context
+  // This is more reliable than trying to match complex nested HTML structures
   
-  for (const pattern of productBlockPatterns) {
-    let match;
-    // Reset lastIndex for each pattern
-    pattern.lastIndex = 0;
-    while ((match = pattern.exec(html)) !== null) {
-      const block = match[1] || match[0];
-      const candidate = extractCandidateFromBlock(block, seenUrls);
-      if (candidate) {
-        candidates.push(candidate);
+  // Pattern to find detail links - captures URL and looks for title in the link or nearby
+  const detailLinkPattern = /<a[^>]*href="(https?:\/\/product\.kyobobook\.co\.kr\/detail\/[^"]+)"[^>]*>([^<]*)<\/a>/gi;
+  
+  let match;
+  while ((match = detailLinkPattern.exec(html)) !== null) {
+    const url = match[1];
+    const linkText = cleanText(match[2]);
+    
+    if (seenUrls.has(url)) continue;
+    
+    // Get context around this link (2000 chars before and after)
+    const contextStart = Math.max(0, match.index - 2000);
+    const contextEnd = Math.min(html.length, match.index + match[0].length + 2000);
+    const context = html.substring(contextStart, contextEnd);
+    
+    // Extract title - prefer link text if it looks like a book title
+    let title = "";
+    
+    // First, check if link text is a valid title (not empty, not just numbers, not UI element)
+    if (linkText && linkText.length >= 2 && isValidBookTitle(linkText)) {
+      title = linkText;
+    }
+    
+    // If no title from link text, look in context for prod_name or similar
+    if (!title) {
+      const titlePatterns = [
+        /<[^>]*class="[^"]*prod_name[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
+        /<[^>]*class="[^"]*prod_title[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
+        /<strong[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/strong>/i,
+        /<span[^>]*class="[^"]*name[^"]*"[^>]*>([^<]+)<\/span>/i,
+      ];
+      
+      for (const pattern of titlePatterns) {
+        const titleMatch = context.match(pattern);
+        if (titleMatch && titleMatch[1] && isValidBookTitle(cleanText(titleMatch[1]))) {
+          title = cleanText(titleMatch[1]);
+          break;
+        }
       }
     }
+    
+    // Skip if no valid title found
+    if (!title) continue;
+    
+    seenUrls.add(url);
+    
+    // Extract author from context
+    let author = "";
+    const authorPatterns = [
+      /<[^>]*class="[^"]*(?:author|prod_author|info_auth)[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
+      /<a[^>]*class="[^"]*author[^"]*"[^>]*>([^<]+)<\/a>/i,
+      /저[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
+      /지은이[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
+    ];
+    
+    for (const pattern of authorPatterns) {
+      const authorMatch = context.match(pattern);
+      if (authorMatch && authorMatch[1]) {
+        const extracted = cleanText(authorMatch[1]);
+        if (extracted.length > 1 && !extracted.match(/^(저자|지은이|글|Author|저)$/i)) {
+          author = extracted;
+          break;
+        }
+      }
+    }
+    
+    // Extract publisher from context
+    let publisher = "";
+    const publisherPatterns = [
+      /<[^>]*class="[^"]*(?:publisher|prod_publish|info_pub)[^"]*"[^>]*>([^<]+)<\/[^>]*>/i,
+      /<a[^>]*class="[^"]*publish[^"]*"[^>]*>([^<]+)<\/a>/i,
+      /출판[:\s]*<[^>]*>([^<]+)<\/[^>]*>/i,
+    ];
+    
+    for (const pattern of publisherPatterns) {
+      const publisherMatch = context.match(pattern);
+      if (publisherMatch && publisherMatch[1]) {
+        const extracted = cleanText(publisherMatch[1]);
+        if (extracted.length > 1 && !extracted.match(/^(출판사|출판|발행처|Publisher)$/i)) {
+          publisher = extracted;
+          break;
+        }
+      }
+    }
+    
+    // Extract year from context
+    let year = "";
+    const yearMatch = context.match(/(\d{4})(?:년|[\.\-\/]\d{1,2})/);
+    if (yearMatch) {
+      const yearNum = parseInt(yearMatch[1], 10);
+      if (yearNum >= 1900 && yearNum <= 2030) {
+        year = yearMatch[1];
+      }
+    }
+    
+    candidates.push({
+      title,
+      author,
+      publisher,
+      publishedYear: year,
+      detailUrl: url,
+      isbn: "",
+    });
+    
+    console.log(`[Book Voice Capture] Found candidate: "${title}" by "${author}" (${publisher})`);
   }
   
   return candidates;
+}
+
+/**
+ * Check if text looks like a valid book title (not a UI element or garbage)
+ */
+function isValidBookTitle(text: string): boolean {
+  if (!text || text.length < 2) return false;
+  
+  // Reject patterns that are clearly not book titles
+  const invalidPatterns = [
+    /^Book\s+\w+$/i,
+    /^[A-Z0-9]{6,}$/,  // Product IDs
+    /^\d+$/,  // Pure numbers
+    /^97[89]\d{10}$/,  // ISBN
+    /^[A-Z]\d{12,}$/i,  // SKU patterns
+  ];
+  
+  for (const pattern of invalidPatterns) {
+    if (pattern.test(text)) return false;
+  }
+  
+  // Reject common Korean UI elements
+  const koreanUiElements = [
+    "이전", "다음", "더보기", "상세", "닫기", "목록", "검색", "장바구니",
+    "정가", "판매가", "적립", "배송", "품절", "절판", "예약", "주문",
+    "바로가기", "리뷰", "평점", "별점", "공유", "찜", "선물", "구매",
+    "책 그리고 꽃", "BI", "로고", "메뉴", "홈", "마이페이지"
+  ];
+  
+  const textLower = text.toLowerCase().trim();
+  for (const elem of koreanUiElements) {
+    if (textLower === elem.toLowerCase()) return false;
+  }
+  
+  // Must contain Korean or meaningful Latin text
+  const hasKorean = /[가-힣]/.test(text);
+  const hasLatinWords = /[a-zA-Z]{2,}/.test(text);
+  
+  return hasKorean || hasLatinWords;
 }
 
 /**
