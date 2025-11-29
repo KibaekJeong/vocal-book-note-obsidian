@@ -366,6 +366,10 @@ export default class BookVoiceCapturePlugin extends Plugin {
     }
 
     const content = await this.app.vault.read(file);
+    if (!isBookNote(content)) {
+      // Skip GPT generation for non-book notes in the folder
+      return;
+    }
     
     // Validate it's likely a book note (has frontmatter or just created in folder)
     // We trust folder location as primary signal, but double check basic validity
@@ -603,6 +607,13 @@ export default class BookVoiceCapturePlugin extends Plugin {
    * Uses workspace event instead of setTimeout for reliable editor access.
    */
   private async openBookAndStartRecording(file: TFile): Promise<void> {
+    // If the file is already open/active, start immediately
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeView?.file?.path === file.path) {
+      this.startRecordingFromView(activeView, file);
+      return;
+    }
+
     // Create a one-time event handler for when the file is opened
     const eventRef: EventRef = this.app.workspace.on("file-open", (openedFile: TFile | null) => {
       // Unregister immediately to prevent multiple triggers
@@ -620,41 +631,52 @@ export default class BookVoiceCapturePlugin extends Plugin {
           return;
         }
 
-        const editor = view.editor;
-        const content = editor.getValue();
-
-        // Verify it's a book note (double-check with content)
-        if (!isBookNote(content)) {
-          new Notice("Selected file is not a valid book note");
-          return;
-        }
-
-        // Move cursor to highlight section
-        moveCursorToHighlightSection(editor);
-
-        const language = this.inferLanguageFromContent(content);
-
-        // Check API key only when recording is about to start
-        if (!this.settings.openAIApiKey) {
-          new Notice("Please set your OpenAI API key in settings to use voice recording.");
-          return;
-        }
-
-        // Start recording
-        new RecordingModal(
-          this.app,
-          async (audioBlob: Blob) => {
-            await this.processVoiceRecording(audioBlob, editor, language);
-          },
-          () => {
-            new Notice("Recording cancelled");
-          }
-        ).open();
+        this.startRecordingFromView(view, file);
       });
     });
 
     // Open the file
     await this.app.workspace.openLinkText(file.path, "", false);
+  }
+
+  /**
+   * Start recording workflow from a ready Markdown view for the given file.
+   */
+  private startRecordingFromView(view: MarkdownView, file: TFile): void {
+    if (view.file?.path !== file.path) {
+      return;
+    }
+
+    const editor = view.editor;
+    const content = editor.getValue();
+
+    // Verify it's a book note (double-check with content)
+    if (!isBookNote(content)) {
+      new Notice("Selected file is not a valid book note");
+      return;
+    }
+
+    // Move cursor to highlight section
+    moveCursorToHighlightSection(editor);
+
+    const language = this.inferLanguageFromContent(content);
+
+    // Check API key only when recording is about to start
+    if (!this.settings.openAIApiKey) {
+      new Notice("Please set your OpenAI API key in settings to use voice recording.");
+      return;
+    }
+
+    // Start recording
+    new RecordingModal(
+      this.app,
+      async (audioBlob: Blob) => {
+        await this.processVoiceRecording(audioBlob, editor, language);
+      },
+      () => {
+        new Notice("Recording cancelled");
+      }
+    ).open();
   }
 
   /**
@@ -693,14 +715,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
         return;
       }
 
-      if (candidates.length === 1) {
-        // Single result - use it directly
-        new Notice(`Found: ${candidates[0].title}`);
-        await this.processSelectedCandidate(candidates[0]);
-        return;
-      }
-
-      // Multiple results - show selection modal
+      // Always show selection modal, even for single result, to prevent wrong book selection
       new Notice(`Found ${candidates.length} books. Please select one.`);
       new KyoboCandidateModal(
         this.app,
