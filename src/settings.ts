@@ -137,50 +137,22 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Base & Data Layout" });
-
     new Setting(containerEl)
-      .setName("Base Folder")
-      .setDesc("Root folder that contains your Base file and book data (e.g., Snipd, Books).")
-      .addText((text: TextComponent) =>
-        text
-          .setPlaceholder(this.plugin.settings.baseFolder || "Books")
-          .setValue(this.plugin.settings.baseFolder)
-          .onChange(async (value: string) => {
-            const normalized = value?.trim() ? normalizePath(value.trim()) : "Books";
-            this.plugin.settings.baseFolder = normalized;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Base File Path")
-      .setDesc("Relative path under the base folder for your Obsidian Base file (e.g., Base/Books.base).")
-      .addText((text: TextComponent) =>
-        text
-          .setPlaceholder(this.plugin.settings.baseFilePath || "Base/Books.base")
-          .setValue(this.plugin.settings.baseFilePath)
-          .onChange(async (value: string) => {
-            const normalized = value?.trim() ? normalizePath(value.trim()) : "Base/Books.base";
-            this.plugin.settings.baseFilePath = normalized;
-            await this.plugin.saveSettings();
-          })
-      );
+      .setName("Base & Data Layout")
+      .setHeading();
 
     new Setting(containerEl)
       .setName("Book Pages Folder")
-      .setDesc("Folder where individual book notes will be stored. Leave empty to reuse the base folder.")
+      .setDesc("Folder where individual book notes will be stored.")
       .addText((text: TextComponent) =>
         text
           .setPlaceholder(this.plugin.settings.dataFolder || "Books")
           .setValue(this.plugin.settings.dataFolder || this.plugin.settings.booksFolder)
           .onChange(async (value: string) => {
-            const fallback = this.plugin.settings.baseFolder || "Books";
-            const normalized = value?.trim()
-              ? normalizePath(value.trim())
-              : fallback;
+            const normalized = value?.trim() ? normalizePath(value.trim()) : "Books";
             this.plugin.settings.dataFolder = normalized;
             this.plugin.settings.booksFolder = normalized;
+            this.plugin.settings.baseFolder = normalized; // Simplify to use one folder
             await this.plugin.saveSettings();
           })
       );

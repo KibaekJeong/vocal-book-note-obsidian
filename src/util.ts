@@ -113,6 +113,7 @@ const HIGHLIGHT_HEADING_ALIASES = [
   "## Voice Highlights",
   "## Book Highlights",
   "## 하이라이트",
+  "## Voice Notes",
 ];
 
 /**
@@ -247,7 +248,7 @@ export function getFrontmatterValue(content: string, key: string): string | null
 export function insertHighlightBlock(
   editor: Editor,
   textToInsert: string,
-  headingText: string = "## 인상 깊은 문장 & 메모 (Voice)"
+  headingText: string = "## Voice Notes"
 ): void {
   // Normalize: ensure text ends with exactly one newline
   const normalizedText = textToInsert.replace(/\n*$/, "\n");
@@ -344,7 +345,7 @@ export function getTemplatePlaceholders(template: string): string[] {
  */
 export function moveCursorToHighlightSection(
   editor: Editor,
-  headingText: string = "## 인상 깊은 문장 & 메모 (Voice)"
+  headingText: string = "## Voice Notes"
 ): void {
   const content = editor.getValue();
   const targetLine = findHighlightSectionLine(content, headingText);
@@ -366,7 +367,7 @@ export function moveCursorToHighlightSection(
 export function replacePlaceholder(
   editor: Editor,
   newContent: string,
-  fallbackHeading: string = "## 인상 깊은 문장 & 메모 (Voice)"
+  fallbackHeading: string = "## Voice Notes"
 ): boolean {
   const range = findPlaceholderRange(editor, true);
   

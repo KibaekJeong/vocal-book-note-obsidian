@@ -69,14 +69,11 @@ Format your response EXACTLY as follows (use these exact headers):
 
 ## ${summaryHeader}
 
-> **What this book is about:**  
 > [Your summary paragraph here]
 
 ---
 
 ## ${keyPointsHeader}
-
-> Core frameworks, insights, or mental models that stand out.
 
 - [Idea 1]
 - [Idea 2]
@@ -86,12 +83,8 @@ Format your response EXACTLY as follows (use these exact headers):
 
 ## ${quotesHeader}
 
-> Popular quotes from the book.
-
 - "[Quote 1]"
 - "[Quote 2]"
-
-## Voice Notes
 
 ---`;
 }

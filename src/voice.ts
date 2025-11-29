@@ -122,11 +122,11 @@ export class RecordingModal extends Modal {
 
   private getSupportedMimeType(): string | null {
     const mimeTypes = [
-      "audio/webm;codecs=opus",
+      "audio/mp4", // Preferred for iOS/Safari
+      "audio/webm;codecs=opus", // Preferred for Chrome/Firefox/Android
       "audio/webm",
       "audio/ogg;codecs=opus",
       "audio/ogg",
-      "audio/mp4",
       "audio/mpeg",
     ];
 

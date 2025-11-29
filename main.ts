@@ -388,18 +388,22 @@ export default class BookVoiceCapturePlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const stored = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
-    if (!this.settings.baseFolder) {
-      this.settings.baseFolder = DEFAULT_SETTINGS.baseFolder;
-    }
-    if (!this.settings.baseFilePath) {
-      this.settings.baseFilePath = DEFAULT_SETTINGS.baseFilePath;
-    }
+    
+    // Legacy migration: if only old settings exist, migrate them to dataFolder
     if (!this.settings.dataFolder) {
-      this.settings.dataFolder = this.settings.booksFolder || DEFAULT_SETTINGS.booksFolder;
+      if (this.settings.booksFolder) {
+        this.settings.dataFolder = this.settings.booksFolder;
+      } else if (this.settings.baseFolder) {
+        // Old default behavior was baseFolder/Data
+        this.settings.dataFolder = `${this.settings.baseFolder}/Data`;
+      } else {
+        this.settings.dataFolder = DEFAULT_SETTINGS.booksFolder;
+      }
     }
-    if (!this.settings.booksFolder) {
-      this.settings.booksFolder = this.settings.dataFolder || DEFAULT_SETTINGS.booksFolder;
-    }
+    
+    // Ensure consistency
+    this.settings.booksFolder = this.settings.dataFolder;
+    this.settings.baseFolder = this.settings.dataFolder;
   }
 
   async saveSettings(): Promise<void> {
@@ -416,23 +420,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
     if (dataFolder) {
       return dataFolder;
     }
-
-    const legacyBooksFolder = this.settings.booksFolder?.trim();
-    if (legacyBooksFolder) {
-      return legacyBooksFolder;
-    }
-
-    const baseFolder = this.settings.baseFolder?.trim();
-    if (baseFolder) {
-      return `${baseFolder}/Data`;
-    }
-
     return DEFAULT_SETTINGS.booksFolder;
-  }
-
-  private getBaseFolderPath(): string {
-    const folder = this.settings.baseFolder?.trim() || DEFAULT_SETTINGS.baseFolder;
-    return folder.replace(/\/+$/, "");
   }
 
   /**
@@ -965,7 +953,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
    * Uses consolidated helper from util.ts for consistent behavior.
    */
   private replacePlaceholderWithHighlight(editor: Editor, highlightBlock: string): void {
-    replacePlaceholder(editor, highlightBlock, "## 인상 깊은 문장 & 메모 (Voice)");
+    replacePlaceholder(editor, highlightBlock, "## Voice Notes");
   }
 
   /**
@@ -1063,7 +1051,7 @@ export default class BookVoiceCapturePlugin extends Plugin {
       insertHighlightBlock(
         editor,
         highlightBlock,
-        "## 인상 깊은 문장 & 메모 (Voice)"
+        "## Voice Notes"
       );
 
       new Notice("Voice highlight added!");
