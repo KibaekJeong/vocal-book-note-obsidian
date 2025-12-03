@@ -25,6 +25,8 @@ export interface BookVoiceCaptureSettings {
   gptSummaryModel: string;
   gptMaxTokens: number;
   gptTemperature: number;
+  // Photo OCR settings
+  photoOcrModel: string;
   // UI settings
   thumbnailSize: number;
 }
@@ -42,6 +44,8 @@ export const DEFAULT_SETTINGS: BookVoiceCaptureSettings = {
   gptSummaryModel: "gpt-4o-mini",
   gptMaxTokens: 2500,
   gptTemperature: 0.7,
+  // Photo OCR defaults
+  photoOcrModel: "gpt-4o-mini",
   // UI defaults
   thumbnailSize: 80,
   bookNoteTemplate: `---
@@ -80,13 +84,7 @@ Description: "{{schema:@Book:description}}"
 ## 인상 깊은 문장 & 메모 (Voice)
 
 `,
-  highlightBlockTemplate: `### p.{{page}}
-
-> {{quote}}
-
-- 메모: {{note}}
-- 캡처일: {{date}}
-
+  highlightBlockTemplate: `- {{note}} (p.{{page}}, {{date}})
 `,
 };
 
@@ -241,6 +239,22 @@ export class BookVoiceCaptureSettingTab extends PluginSettingTab {
           .onChange(async (value: string) => {
             const parsed = parseFloat(value);
             this.plugin.settings.gptTemperature = isNaN(parsed) ? 0.7 : Math.max(0, Math.min(1, parsed));
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Photo OCR Section
+    containerEl.createEl("h3", { text: "Photo Quote Capture" });
+
+    new Setting(containerEl)
+      .setName("Photo OCR Model")
+      .setDesc("The OpenAI vision model to use for extracting text from photos (e.g., gpt-4o-mini, gpt-4o).")
+      .addText((text: TextComponent) =>
+        text
+          .setPlaceholder("gpt-4o-mini")
+          .setValue(this.plugin.settings.photoOcrModel)
+          .onChange(async (value: string) => {
+            this.plugin.settings.photoOcrModel = value || "gpt-4o-mini";
             await this.plugin.saveSettings();
           })
       );

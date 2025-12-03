@@ -30,7 +30,9 @@ import {
   AudioFileModal,
   transcribeAudio,
   parseTranscription,
+  TranscriptionResult,
 } from "./src/voice";
+import { PhotoQuoteModal } from "./src/photo";
 import {
   renderBookNoteTemplate,
   renderHighlightTemplate,
@@ -286,23 +288,26 @@ class KyoboCandidateModal extends SuggestModal<KyoboSearchCandidate> {
 }
 
 /**
- * Modal for choosing action: Create new book or Add to existing
+ * Modal for choosing action: Create new book, Add voice note, or Add photo quote
  */
 class BookActionModal extends Modal {
   private onCreateNew: () => void;
-  private onAddToExisting: () => void;
+  private onAddVoiceNote: () => void;
+  private onAddPhotoQuote: () => void;
   private hasExistingBooks: boolean;
 
   constructor(
     app: App,
     hasExistingBooks: boolean,
     onCreateNew: () => void,
-    onAddToExisting: () => void
+    onAddVoiceNote: () => void,
+    onAddPhotoQuote: () => void
   ) {
     super(app);
     this.hasExistingBooks = hasExistingBooks;
     this.onCreateNew = onCreateNew;
-    this.onAddToExisting = onAddToExisting;
+    this.onAddVoiceNote = onAddVoiceNote;
+    this.onAddPhotoQuote = onAddPhotoQuote;
   }
 
   onOpen(): void {
@@ -331,23 +336,34 @@ class BookActionModal extends Modal {
       this.onCreateNew();
     };
 
-    // Add to Existing Book button
-    const addToExistingBtn = buttonsEl.createEl("button", {
+    // Add Voice Note button
+    const addVoiceBtn = buttonsEl.createEl("button", {
       text: "🎤 Add Voice Note to Existing Book",
     });
-    addToExistingBtn.style.padding = "12px 24px";
-    addToExistingBtn.style.fontSize = "1em";
+    addVoiceBtn.style.padding = "12px 24px";
+    addVoiceBtn.style.fontSize = "1em";
     
     if (!this.hasExistingBooks) {
-      addToExistingBtn.disabled = true;
-      addToExistingBtn.style.opacity = "0.5";
-      addToExistingBtn.title = "No existing book notes found";
+      addVoiceBtn.disabled = true;
+      addVoiceBtn.style.opacity = "0.5";
+      addVoiceBtn.title = "No existing book notes found";
     } else {
-      addToExistingBtn.onclick = (): void => {
+      addVoiceBtn.onclick = (): void => {
         this.close();
-        this.onAddToExisting();
+        this.onAddVoiceNote();
       };
     }
+
+    // Add Photo Quote button
+    const addPhotoBtn = buttonsEl.createEl("button", {
+      text: "📷 Add Quote from Photo",
+    });
+    addPhotoBtn.style.padding = "12px 24px";
+    addPhotoBtn.style.fontSize = "1em";
+    addPhotoBtn.onclick = (): void => {
+      this.close();
+      this.onAddPhotoQuote();
+    };
 
     // Cancel button
     const cancelBtn = buttonsEl.createEl("button", { text: "Cancel" });
@@ -376,14 +392,9 @@ export default class BookVoiceCapturePlugin extends Plugin {
     // Add settings tab
     this.addSettingTab(new BookVoiceCaptureSettingTab(this.app, this));
 
-    // Add ribbon icon for main command
+    // Add ribbon icon for main command (single entry point)
     this.addRibbonIcon("book-open", "Book Voice Capture", () => {
       this.showActionModal();
-    });
-
-    // Add ribbon icon for quick voice recording to existing book
-    this.addRibbonIcon("mic", "Add Voice Note to Book", () => {
-      this.addVoiceNoteToExistingBook();
     });
 
     // Command: Book Capture (main entry point with action choice)
@@ -422,6 +433,15 @@ export default class BookVoiceCapturePlugin extends Plugin {
       name: "Import Voice Note from File",
       editorCallback: (editor: Editor, view: MarkdownView) => {
         this.importVoiceNoteFromFile(editor, view);
+      },
+    });
+
+    // Command: Add Photo Quote (for current note)
+    this.addCommand({
+      id: "book-voice-capture-add-photo-quote",
+      name: "Add Photo Quote (Current Note)",
+      editorCallback: (editor: Editor, view: MarkdownView) => {
+        this.addPhotoQuote(editor, view);
       },
     });
 
@@ -664,7 +684,8 @@ export default class BookVoiceCapturePlugin extends Plugin {
       this.app,
       hasExistingBooks,
       () => this.createOrOpenBookNote(),
-      () => this.addVoiceNoteToExistingBook()
+      () => this.addVoiceNoteToExistingBook(),
+      () => this.addPhotoQuoteToCurrentNote()
     ).open();
   }
 
@@ -1233,5 +1254,86 @@ export default class BookVoiceCapturePlugin extends Plugin {
         new Notice("Failed to add voice highlight. Check console for details.");
       }
     }
+  }
+
+  /**
+   * Add photo quote to the current active note (ribbon icon handler).
+   * Gets the active editor and delegates to addPhotoQuote.
+   */
+  private addPhotoQuoteToCurrentNote(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) {
+      new Notice("No active note. Please open a book note first.");
+      return;
+    }
+    
+    this.addPhotoQuote(view.editor, view);
+  }
+
+  /**
+   * Command handler: Add Photo Quote (current note).
+   * Opens photo modal for OCR extraction and sentence selection.
+   */
+  private addPhotoQuote(editor: Editor, view: MarkdownView): void {
+    // Check API key
+    if (!this.settings.openAIApiKey) {
+      new Notice("Please set your OpenAI API key in Book Voice Capture settings.");
+      return;
+    }
+
+    // Check if current file is a book note
+    const file = view.file;
+    let isBook = false;
+    const content = editor.getValue();
+    
+    if (file) {
+      isBook = isBookNoteFromCache(this.app, file);
+    }
+    
+    // Fallback to content-based check
+    if (!isBook) {
+      isBook = isBookNote(content);
+    }
+    
+    if (!isBook) {
+      new Notice("Active note is not a book note (missing 'type: book' in frontmatter).");
+      return;
+    }
+
+    // Move cursor to highlight section
+    moveCursorToHighlightSection(editor);
+
+    // Open photo quote modal
+    new PhotoQuoteModal(
+      this.app,
+      this.settings.openAIApiKey,
+      this.settings.photoOcrModel,
+      (result: TranscriptionResult) => {
+        this.processPhotoQuote(result, editor);
+      },
+      () => {
+        new Notice("Photo quote cancelled");
+      }
+    ).open();
+  }
+
+  /**
+   * Process the selected photo quote and insert into the note.
+   */
+  private processPhotoQuote(result: TranscriptionResult, editor: Editor): void {
+    // Render the highlight block using existing template
+    const highlightBlock = renderHighlightTemplate(
+      this.settings.highlightBlockTemplate,
+      result
+    );
+
+    // Insert using the same method as voice notes
+    insertHighlightBlock(
+      editor,
+      highlightBlock,
+      "## Voice Notes"
+    );
+
+    new Notice("Photo quote added!");
   }
 }

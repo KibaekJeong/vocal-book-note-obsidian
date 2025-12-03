@@ -108,28 +108,16 @@ export function renderHighlightTemplate(
 
 /**
  * Create a simple highlight block when no template is provided.
- * Builds output directly without cleanup steps.
+ * Single line format: note (page, date)
  */
 export function createDefaultHighlightBlock(transcription: TranscriptionResult): string {
   const date = getCurrentDateFormatted();
   const page = transcription.page || "?";
   
-  let block = `### p.${page}\n\n`;
+  // Use note if present, otherwise fall back to full text
+  const content = transcription.note || transcription.text || "";
   
-  // Only add quote block if there's actual content
-  if (transcription.quote) {
-    block += `> ${transcription.quote}\n\n`;
-  }
-  
-  // Memo: use note if present, otherwise fall back to full text
-  const memoContent = transcription.note || transcription.text || "";
-  if (memoContent) {
-    block += `- 메모: ${memoContent}\n`;
-  }
-  
-  block += `- 캡처일: ${date}\n\n`;
-  
-  return block;
+  return `- ${content} (p.${page}, ${date})\n`;
 }
 
 /**
@@ -146,10 +134,7 @@ export const CLIPPING_PLACEHOLDER_MARKER = "<!-- book-voice-capture-placeholder 
 export function createClippingPlaceholder(): string {
   const date = getCurrentDateFormatted();
   
-  return `### p.? (클리핑 임시) ${CLIPPING_PLACEHOLDER_MARKER}
-
-- 메모: (녹음 예정)
-- 캡처일: ${date}
+  return `- (녹음 중...) (p.?, ${date}) ${CLIPPING_PLACEHOLDER_MARKER}
 `;
 }
 
